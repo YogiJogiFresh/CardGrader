@@ -33,8 +33,14 @@ yarn-error.*
 # local env files
 .env*.local
 
+# local agent tooling
+.agents/
+skills-lock.json
+
 # typescript
 *.tsbuildinfo
+apps/web/vite.config.js
+apps/web/vite.config.d.ts
 
 # generated native folders
 /ios

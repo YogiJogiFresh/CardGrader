@@ -1,25 +1,47 @@
 {
   "expo": {
-    "name": "CardGrader",
-    "slug": "CardGrader",
-    "version": "1.0.0",
+    "name": "Card Grader",
+    "slug": "cardgrader",
+    "version": "0.1.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.cardgrader.mobile"
     },
     "android": {
+      "package": "com.cardgrader.mobile",
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/android-icon-foreground.png",
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "permissions": [
+        "android.permission.CAMERA"
+      ]
     },
     "web": {
       "favicon": "./assets/favicon.png"
-    }
+    },
+    "plugins": [
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow Card Grader to photograph cards for on-device condition analysis.",
+          "recordAudioAndroid": false,
+          "barcodeScannerEnabled": false
+        }
+      ],
+      "onnxruntime-react-native"
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "04088364-b49a-4652-8c85-0ac6b62a31c2"
+      }
+    },
+    "owner": "yogijogifresh"
   }
 }
