@@ -36,8 +36,7 @@ export default defineConfig(({ mode }) => {
           navigateFallback: `${base}index.html`,
           runtimeCaching: [
             {
-              urlPattern: ({ url }) =>
-                url.pathname.startsWith(`${base}models/`),
+              urlPattern: new RegExp(`${base}models/`),
               handler: 'CacheFirst',
               options: {
                 cacheName: 'cardgrader-models',
