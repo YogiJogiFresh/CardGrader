@@ -49,10 +49,12 @@ manual blemish markers and notes; PNG report downloads; and a print view that
 can be saved as PDF. Images remain in the current browser tab and are not
 uploaded.
 
-Blemish markers are added by holding Ctrl and left-clicking the original
-inspection image and removed by right-clicking the marker. Marker size is
-adjustable per card side. Mouse-wheel events over either inspection image
-control synchronized zoom without scrolling the browser page.
+On touchscreens, blemish markers are added with a quick tap on the original
+inspection image or placed precisely by touching and dragging. Existing markers
+can also be dragged. Mouse users can still hold Ctrl and click or drag, and
+markers can be removed by right-clicking or using their Delete controls. Marker
+size is adjustable per card side. Touch-friendly minus/plus buttons and a range
+control adjust synchronized zoom for both inspection images.
 
 After both sides are analyzed, users can compare their centering and manually
 marked blemishes against PSA, TAG, CGC, or Beckett/BGS criteria. The app reports

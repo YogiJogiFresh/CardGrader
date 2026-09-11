@@ -54,6 +54,11 @@ interface InspectionViewDrag {
   panY: number;
 }
 
+interface AnnotationDrag {
+  annotationId: string;
+  pointerId: number;
+}
+
 interface SideSnapshot {
   capture: Capture;
   guides: EditableGuides;
@@ -544,8 +549,6 @@ function EditableCenteringCard({
   zoomEnabled: boolean;
 }) {
   const frameRef = useRef<HTMLDivElement>(null);
-  const originalInspectionRef = useRef<HTMLDivElement>(null);
-  const previewInspectionRef = useRef<HTMLDivElement>(null);
   const filteredUrlRef = useRef<string | null>(null);
   const [guides, setGuides] = useState<EditableGuides>(() =>
     guidesFromMeasurement(measurement),
@@ -569,6 +572,8 @@ function EditableCenteringCard({
   const [inspectionPan, setInspectionPan] = useState({ x: 0, y: 0 });
   const [inspectionDrag, setInspectionDrag] =
     useState<InspectionViewDrag | null>(null);
+  const [annotationDrag, setAnnotationDrag] =
+    useState<AnnotationDrag | null>(null);
   const percentages = useMemo(() => calculatePercentages(guides), [guides]);
   const horizontalStatus = balanceStatus(percentages.horizontal.first);
   const verticalStatus = balanceStatus(percentages.vertical.first);
@@ -649,25 +654,6 @@ function EditableCenteringCard({
     },
     [],
   );
-
-  useEffect(() => {
-    const panes = [
-      originalInspectionRef.current,
-      previewInspectionRef.current,
-    ].filter((pane): pane is HTMLDivElement => pane !== null);
-    const handleWheel = (event: WheelEvent) => {
-      event.preventDefault();
-      event.stopPropagation();
-      zoomInspection(inspectionZoom + (event.deltaY < 0 ? 0.25 : -0.25));
-    };
-
-    panes.forEach((pane) =>
-      pane.addEventListener('wheel', handleWheel, { passive: false }),
-    );
-    return () => {
-      panes.forEach((pane) => pane.removeEventListener('wheel', handleWheel));
-    };
-  }, [inspectionZoom]);
 
   useEffect(() => {
     onSnapshot({
@@ -771,11 +757,12 @@ function EditableCenteringCard({
     setManuallyAdjusted(true);
   }
 
-  function addAnnotationAt(x: number, y: number) {
+  function addAnnotationAt(x: number, y: number): string {
+    const id = createId();
     setAnnotations((current) => [
       ...current,
       {
-        id: createId(),
+        id,
         type: annotationType,
         note: annotationNote.trim(),
         x: clamp(x, 0, 1),
@@ -783,6 +770,7 @@ function EditableCenteringCard({
       },
     ]);
     setAnnotationNote('');
+    return id;
   }
 
   function beginInspectionInteraction(
@@ -792,7 +780,9 @@ function EditableCenteringCard({
     if (event.button !== 0) return;
     event.preventDefault();
     const pane = event.currentTarget;
-    if (originalPane && event.ctrlKey) {
+    const shouldPlaceAnnotation =
+      originalPane && (event.pointerType !== 'mouse' || event.ctrlKey);
+    if (shouldPlaceAnnotation) {
       const point = inspectionPoint(
         event.clientX,
         event.clientY,
@@ -800,7 +790,12 @@ function EditableCenteringCard({
         inspectionZoom,
         inspectionPan,
       );
-      addAnnotationAt(point.x, point.y);
+      const annotationId = addAnnotationAt(point.x, point.y);
+      pane.setPointerCapture(event.pointerId);
+      setAnnotationDrag({
+        annotationId,
+        pointerId: event.pointerId,
+      });
       return;
     }
     pane.setPointerCapture(event.pointerId);
@@ -814,6 +809,28 @@ function EditableCenteringCard({
   }
 
   function moveInspection(event: ReactPointerEvent<HTMLDivElement>) {
+    if (annotationDrag?.pointerId === event.pointerId) {
+      const point = inspectionPoint(
+        event.clientX,
+        event.clientY,
+        event.currentTarget.getBoundingClientRect(),
+        inspectionZoom,
+        inspectionPan,
+      );
+      setAnnotations((current) =>
+        current.map((annotation) =>
+          annotation.id === annotationDrag.annotationId
+            ? {
+                ...annotation,
+                x: clamp(point.x, 0, 1),
+                y: clamp(point.y, 0, 1),
+              }
+            : annotation,
+        ),
+      );
+      return;
+    }
+
     if (!inspectionDrag || inspectionDrag.pointerId !== event.pointerId) return;
     const rectangle = event.currentTarget.getBoundingClientRect();
     setInspectionPan(
@@ -832,11 +849,18 @@ function EditableCenteringCard({
   }
 
   function endInspection(event: ReactPointerEvent<HTMLDivElement>) {
-    if (!inspectionDrag || inspectionDrag.pointerId !== event.pointerId) return;
+    const annotationEnded = annotationDrag?.pointerId === event.pointerId;
+    const panEnded = inspectionDrag?.pointerId === event.pointerId;
+    if (!annotationEnded && !panEnded) return;
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
-    setInspectionDrag(null);
+    if (annotationEnded) {
+      setAnnotationDrag(null);
+    }
+    if (panEnded) {
+      setInspectionDrag(null);
+    }
   }
 
   function zoomInspection(nextZoom: number) {
@@ -855,10 +879,7 @@ function EditableCenteringCard({
   }
 
   function keyboardAnnotate(event: ReactKeyboardEvent<HTMLDivElement>) {
-    if (
-      event.ctrlKey &&
-      (event.key === 'Enter' || event.key === ' ')
-    ) {
+    if (event.key === 'Enter' || event.key === ' ') {
       event.preventDefault();
       const rectangle = event.currentTarget.getBoundingClientRect();
       const point = inspectionPoint(
@@ -994,8 +1015,21 @@ function EditableCenteringCard({
         </div>
 
         <div className="inspection-view-controls">
-          <label>
-            Synchronized zoom
+          <div
+            aria-label={`${viewTitle(measurement.viewId)} synchronized zoom controls`}
+            className="inspection-zoom-controls"
+            role="group"
+          >
+            <span>Synchronized zoom</span>
+            <button
+              aria-label="Zoom out"
+              className="secondary inspection-zoom-button"
+              disabled={inspectionZoom <= 1}
+              onClick={() => zoomInspection(inspectionZoom - 0.25)}
+              type="button"
+            >
+              −
+            </button>
             <input
               aria-label={`${viewTitle(measurement.viewId)} inspection zoom`}
               max="4"
@@ -1005,8 +1039,17 @@ function EditableCenteringCard({
               type="range"
               value={inspectionZoom}
             />
+            <button
+              aria-label="Zoom in"
+              className="secondary inspection-zoom-button"
+              disabled={inspectionZoom >= 4}
+              onClick={() => zoomInspection(inspectionZoom + 0.25)}
+              type="button"
+            >
+              +
+            </button>
             <strong>{inspectionZoom.toFixed(2)}×</strong>
-          </label>
+          </div>
           <button
             className="secondary compact-button"
             disabled={inspectionZoom === 1 && inspectionPan.x === 0 && inspectionPan.y === 0}
@@ -1022,9 +1065,11 @@ function EditableCenteringCard({
 
         <div className="inspection-comparison">
           <figure>
-            <figcaption>Original · Ctrl + left-click to add a marker</figcaption>
+            <figcaption>
+              Original · Tap or drag to place a marker
+            </figcaption>
             <div
-              aria-label={`${viewTitle(measurement.viewId)} original inspection pane. Drag to pan, use the mouse wheel to zoom, or press Control plus Enter to place a marker at the view center.`}
+              aria-label={`${viewTitle(measurement.viewId)} original inspection pane. Tap or drag on a touchscreen to place a marker. Mouse users can hold Control and click or drag. Press Enter to place a marker at the view center.`}
               className="inspection-pane"
               onContextMenu={(event) => {
                 if (event.ctrlKey) {
@@ -1038,7 +1083,6 @@ function EditableCenteringCard({
               }
               onPointerMove={moveInspection}
               onPointerUp={endInspection}
-              ref={originalInspectionRef}
               style={{ aspectRatio: `${capture.width} / ${capture.height}` }}
               tabIndex={0}
             >
@@ -1053,7 +1097,7 @@ function EditableCenteringCard({
                 />
                 {annotations.map((annotation, index) => (
                   <button
-                    aria-label={`Blemish ${index + 1}: ${formatBlemishType(annotation.type)}. Right-click to remove.`}
+                    aria-label={`Blemish ${index + 1}: ${formatBlemishType(annotation.type)}. Drag to reposition or use Delete to remove.`}
                     className="blemish-marker"
                     key={annotation.id}
                     onContextMenu={(event) => {
@@ -1071,7 +1115,16 @@ function EditableCenteringCard({
                         );
                       }
                     }}
-                    onPointerDown={(event) => event.stopPropagation()}
+                    onPointerDown={(event) => {
+                      if (event.button !== 0) return;
+                      event.preventDefault();
+                      event.stopPropagation();
+                      event.currentTarget.setPointerCapture(event.pointerId);
+                      setAnnotationDrag({
+                        annotationId: annotation.id,
+                        pointerId: event.pointerId,
+                      });
+                    }}
                     style={{
                       fontSize: `${Math.max(7, annotationMarkerSize * 0.38)}px`,
                       height: `${annotationMarkerSize}px`,
@@ -1079,7 +1132,7 @@ function EditableCenteringCard({
                       top: `${annotation.y * 100}%`,
                       width: `${annotationMarkerSize}px`,
                     }}
-                    title="Right-click to remove"
+                    title="Drag to reposition; right-click to remove"
                     type="button"
                   >
                     {index + 1}
@@ -1094,7 +1147,7 @@ function EditableCenteringCard({
               {perspectiveCorrected ? ' · corrected' : ''}
             </figcaption>
             <div
-              aria-label={`${viewTitle(measurement.viewId)} filtered preview. Drag to pan and use the mouse wheel to zoom.`}
+              aria-label={`${viewTitle(measurement.viewId)} filtered preview. Drag to pan and use the zoom controls above.`}
               className="inspection-pane"
               onPointerCancel={endInspection}
               onPointerDown={(event) =>
@@ -1102,7 +1155,6 @@ function EditableCenteringCard({
               }
               onPointerMove={moveInspection}
               onPointerUp={endInspection}
-              ref={previewInspectionRef}
               style={{ aspectRatio: `${capture.width} / ${capture.height}` }}
               tabIndex={0}
             >
@@ -1179,10 +1231,12 @@ function EditableCenteringCard({
             </label>
           </div>
           <p className="annotation-help">
-            Hold Ctrl and left-click the original image to add the selected
-            blemish. Right-click a marker to remove it. For keyboard use, focus
-            the original image and press Ctrl + Enter to add at the center, then
-            focus a marker and press Delete or Backspace to remove it.
+            On a touchscreen, tap the original image to add the selected
+            blemish or keep touching and drag for precise placement. You can
+            also drag an existing marker. Mouse users can hold Ctrl and click
+            or drag. Right-click a marker to remove it, or use the Delete
+            control below. For keyboard use, focus the original image and press
+            Enter or Space to add at the center.
           </p>
           {annotations.length === 0 ? (
             <p>No blemishes marked.</p>

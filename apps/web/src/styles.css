@@ -1121,14 +1121,31 @@ figcaption select {
   background: #0d1921;
 }
 
-.inspection-view-controls label {
-  grid-template-columns: auto minmax(80px, 1fr) auto;
+.inspection-zoom-controls {
+  display: grid;
+  grid-template-columns: 44px minmax(80px, 1fr) 44px auto;
   align-items: center;
+  gap: 8px;
+  color: #cbd5df;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.inspection-zoom-controls > span {
+  grid-column: 1 / -1;
 }
 
 .inspection-view-controls input {
   width: 100%;
   accent-color: #55c2ff;
+}
+
+.inspection-zoom-button {
+  width: 44px;
+  min-height: 44px;
+  padding: 0;
+  font-size: 1.35rem;
+  line-height: 1;
 }
 
 .compact-button {
@@ -1235,6 +1252,7 @@ figcaption select {
   box-shadow: 0 2px 8px rgb(0 0 0 / 70%);
   cursor: context-menu;
   pointer-events: auto;
+  touch-action: none;
   transform: translate(-50%, -50%);
 }
 
