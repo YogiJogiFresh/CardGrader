@@ -29,6 +29,12 @@ are green at 55/45 or better, yellow through 60/40, and red beyond 60/40. This
 is a centering estimate only; no grade prediction is produced. Grade prediction
 is deferred from the current PWA milestone.
 
+If automatic card-edge detection cannot separate the card from its background,
+camera captures can continue with an explicit override. The app maps the guide
+shown over the camera preview into the full-resolution photo, uses it as the
+initial cyan card-edge overlay, and lets the user adjust all four corners before
+relying on the estimate.
+
 The cyan outer-card and yellow inner-frame overlays are directly editable with
 touch or mouse. Each corner moves independently to follow slight perspective or
 rotation, recalculating left/right and top/bottom percentages in real time. Each

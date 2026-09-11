@@ -14,7 +14,12 @@ import {
   useState,
 } from 'react';
 
-import { analyzeCentering, CenteringMeasurement } from './centering';
+import {
+  analyzeCentering,
+  analyzeCenteringWithOuterBounds,
+  CenteringBounds,
+  CenteringMeasurement,
+} from './centering';
 import { CenteringResults } from './CenteringResults';
 
 const MAX_IMAGE_BYTES = 25 * 1024 * 1024;
@@ -29,6 +34,8 @@ type CameraState =
 
 export function App() {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const cameraFrameRef = useRef<HTMLDivElement>(null);
+  const cameraGuideRef = useRef<HTMLDivElement>(null);
   const singleFileInputRef = useRef<HTMLInputElement>(null);
   const bulkFileInputRef = useRef<HTMLInputElement>(null);
   const cameraSectionRef = useRef<HTMLDivElement>(null);
@@ -52,6 +59,12 @@ export function App() {
     CenteringMeasurement[] | null
   >(null);
   const [centeringError, setCenteringError] = useState<string | null>(null);
+  const [cameraGuideBounds, setCameraGuideBounds] = useState<
+    Record<string, CenteringBounds>
+  >({});
+  const [failedCenteringCaptureIds, setFailedCenteringCaptureIds] = useState<
+    string[]
+  >([]);
   const [uploadFeedback, setUploadFeedback] = useState<{
     kind: 'error' | 'success';
     message: string;
@@ -196,7 +209,18 @@ export function App() {
       return;
     }
 
-    addCapture(currentStep.id, blob, canvas.width, canvas.height);
+    const guideBounds = calculateCameraGuideBounds(
+      video,
+      cameraFrameRef.current,
+      cameraGuideRef.current,
+    );
+    addCapture(
+      currentStep.id,
+      blob,
+      canvas.width,
+      canvas.height,
+      guideBounds ?? undefined,
+    );
   }
 
   async function chooseCurrentPhoto(event: ChangeEvent<HTMLInputElement>) {
@@ -297,34 +321,39 @@ export function App() {
     blob: Blob,
     width: number,
     height: number,
+    guideBounds?: CenteringBounds,
   ) {
     const uri = URL.createObjectURL(blob);
-    setCaptures((current) => [
-      ...current,
-      createCapture(viewId, { uri, width, height }),
-    ]);
+    const capture = createCapture(viewId, { uri, width, height });
+    setCaptures((current) => [...current, capture]);
+    if (guideBounds) {
+      setCameraGuideBounds((current) => ({
+        ...current,
+        [capture.id]: guideBounds,
+      }));
+    }
     clearCentering();
   }
 
   function removeLastCapture() {
-    setCaptures((current) => {
-      const last = current.at(-1);
-      if (last) {
-        URL.revokeObjectURL(last.uri);
-      }
-      return current.slice(0, -1);
-    });
+    const last = captures.at(-1);
+    if (last) {
+      URL.revokeObjectURL(last.uri);
+      setCameraGuideBounds((bounds) => withoutKey(bounds, last.id));
+    }
+    setCaptures((current) => current.slice(0, -1));
     clearCentering();
   }
 
   function removeCapture(captureId: string) {
-    setCaptures((current) => {
-      const removed = current.find((capture) => capture.id === captureId);
-      if (removed) {
-        URL.revokeObjectURL(removed.uri);
-      }
-      return current.filter((capture) => capture.id !== captureId);
-    });
+    const removed = captures.find((capture) => capture.id === captureId);
+    if (removed) {
+      URL.revokeObjectURL(removed.uri);
+      setCameraGuideBounds((bounds) => withoutKey(bounds, removed.id));
+    }
+    setCaptures((current) =>
+      current.filter((capture) => capture.id !== captureId),
+    );
     setUploadFeedback({
       kind: 'success',
       message: 'Picture removed. Upload or capture a replacement for its view.',
@@ -361,6 +390,7 @@ export function App() {
   function reset() {
     captures.forEach((capture) => URL.revokeObjectURL(capture.uri));
     setCaptures([]);
+    setCameraGuideBounds({});
     setCaptureMethod(null);
     setCameraOpen(false);
     setUploadOpen(false);
@@ -375,9 +405,10 @@ export function App() {
   function clearCentering() {
     setCenteringMeasurements(null);
     setCenteringError(null);
+    setFailedCenteringCaptureIds([]);
   }
 
-  async function calculateCentering() {
+  async function calculateCentering(useCameraGuides = false) {
     const straightCaptures = ['front-straight', 'back-straight'].map(
       (viewId) =>
         captures.find((capture) => capture.viewId === viewId),
@@ -393,9 +424,31 @@ export function App() {
     setIsAnalyzingCentering(true);
     setCenteringError(null);
     try {
-      const measurements = await Promise.all(
-        straightCaptures.map((capture) => analyzeCentering(capture!)),
+      const results = await Promise.allSettled(
+        straightCaptures.map((capture) => {
+          const resolvedCapture = capture!;
+          const guideBounds = cameraGuideBounds[resolvedCapture.id];
+          return useCameraGuides && guideBounds
+            ? analyzeCenteringWithOuterBounds(resolvedCapture, guideBounds)
+            : analyzeCentering(resolvedCapture);
+        }),
       );
+      const failedIds = results.flatMap((result, index) =>
+        result.status === 'rejected' ? [straightCaptures[index]!.id] : [],
+      );
+      if (failedIds.length > 0) {
+        setFailedCenteringCaptureIds(failedIds);
+        const failure = results.find(
+          (result): result is PromiseRejectedResult =>
+            result.status === 'rejected',
+        );
+        throw failure?.reason;
+      }
+      const measurements = results.map(
+        (result) =>
+          (result as PromiseFulfilledResult<CenteringMeasurement>).value,
+      );
+      setFailedCenteringCaptureIds([]);
       setCenteringMeasurements(measurements);
       setCenteringOpen(true);
       scrollToSection(centeringSectionRef);
@@ -514,7 +567,14 @@ export function App() {
             error={centeringError}
             isAnalyzing={isAnalyzingCentering}
             measurements={centeringMeasurements}
-            onCalculate={calculateCentering}
+            canOverride={
+              failedCenteringCaptureIds.length > 0 &&
+              failedCenteringCaptureIds.every(
+                (captureId) => cameraGuideBounds[captureId],
+              )
+            }
+            onCalculate={() => void calculateCentering()}
+            onOverride={() => void calculateCentering(true)}
             />
           </CollapsibleSection>
           <button className="primary" onClick={reset}>
@@ -598,9 +658,13 @@ export function App() {
         >
           <div className="camera-panel">
             {camera.status === 'ready' ? (
-            <div className="camera-frame">
+            <div className="camera-frame" ref={cameraFrameRef}>
               <video ref={videoRef} autoPlay muted playsInline />
-              <div className="card-guide" aria-hidden="true" />
+              <div
+                className="card-guide"
+                aria-hidden="true"
+                ref={cameraGuideRef}
+              />
             </div>
             ) : (
             <div className="camera-placeholder">
@@ -767,7 +831,14 @@ export function App() {
             error={centeringError}
             isAnalyzing={isAnalyzingCentering}
             measurements={centeringMeasurements}
-            onCalculate={calculateCentering}
+            canOverride={
+              failedCenteringCaptureIds.length > 0 &&
+              failedCenteringCaptureIds.every(
+                (captureId) => cameraGuideBounds[captureId],
+              )
+            }
+            onCalculate={() => void calculateCentering()}
+            onOverride={() => void calculateCentering(true)}
             />
           </CollapsibleSection>
         ) : null}
@@ -881,18 +952,72 @@ function scrollToElement(id: string) {
   });
 }
 
+function calculateCameraGuideBounds(
+  video: HTMLVideoElement,
+  frame: HTMLDivElement | null,
+  guide: HTMLDivElement | null,
+): CenteringBounds | null {
+  if (!frame || !guide || video.videoWidth <= 0 || video.videoHeight <= 0) {
+    return null;
+  }
+
+  const frameRect = frame.getBoundingClientRect();
+  const guideRect = guide.getBoundingClientRect();
+  if (frameRect.width <= 0 || frameRect.height <= 0) {
+    return null;
+  }
+
+  const scale = Math.max(
+    frameRect.width / video.videoWidth,
+    frameRect.height / video.videoHeight,
+  );
+  const renderedWidth = video.videoWidth * scale;
+  const renderedHeight = video.videoHeight * scale;
+  const renderedLeft = (frameRect.width - renderedWidth) / 2;
+  const renderedTop = (frameRect.height - renderedHeight) / 2;
+
+  return {
+    left: clampUnit(
+      (guideRect.left - frameRect.left - renderedLeft) / renderedWidth,
+    ),
+    top: clampUnit(
+      (guideRect.top - frameRect.top - renderedTop) / renderedHeight,
+    ),
+    right: clampUnit(
+      (guideRect.right - frameRect.left - renderedLeft) / renderedWidth,
+    ),
+    bottom: clampUnit(
+      (guideRect.bottom - frameRect.top - renderedTop) / renderedHeight,
+    ),
+  };
+}
+
+function clampUnit(value: number): number {
+  return Math.min(1, Math.max(0, value));
+}
+
+function withoutKey<T>(record: Record<string, T>, key: string) {
+  const next = { ...record };
+  delete next[key];
+  return next;
+}
+
 function CenteringAnalysisPanel({
+  canOverride,
   captures,
   error,
   isAnalyzing,
   measurements,
   onCalculate,
+  onOverride,
 }: {
+  canOverride: boolean;
   captures: Capture[];
   error: string | null;
   isAnalyzing: boolean;
   measurements: CenteringMeasurement[] | null;
   onCalculate: () => void;
+  onOverride: () => void;
 }) {
   return (
     <section className="centering-analysis-panel">
@@ -909,9 +1034,28 @@ function CenteringAnalysisPanel({
         <CenteringResults captures={captures} measurements={measurements} />
       ) : null}
       {error ? (
-        <p className="error" role="alert">
-          {error}
-        </p>
+        <>
+          <p className="error" role="alert">
+            {error}
+          </p>
+          {canOverride ? (
+            <div className="centering-override">
+              <p>
+                Continue with the guide that was visible over the camera
+                preview. It will become the cyan card-edge overlay and can be
+                adjusted before using the estimate.
+              </p>
+              <button
+                className="secondary"
+                disabled={isAnalyzing}
+                onClick={onOverride}
+                type="button"
+              >
+                Use camera guides and continue
+              </button>
+            </div>
+          ) : null}
+        </>
       ) : null}
       <button
         className="primary"
