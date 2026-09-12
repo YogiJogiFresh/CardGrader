@@ -51,10 +51,11 @@ uploaded.
 
 On touchscreens, blemish markers are added with a quick tap on the original
 inspection image or placed precisely by touching and dragging. Existing markers
-can also be dragged. Mouse users can still hold Ctrl and click or drag, and
-markers can be removed by right-clicking or using their Delete controls. Marker
-size is adjustable per card side. Touch-friendly minus/plus buttons and a range
-control adjust synchronized zoom for both inspection images.
+can also be dragged. A second finger cancels pending marker placement and starts
+synchronized pinch zoom, so pinching never creates a blemish. Mouse users can
+still hold Ctrl and click or drag. Markers can be removed individually or all at
+once with Clear all. Marker size is adjustable per card side, and touch-friendly
+minus/plus buttons and a range control remain available for zoom.
 
 After both sides are analyzed, users can compare their centering and manually
 marked blemishes against PSA, TAG, CGC, or Beckett/BGS criteria. The app reports

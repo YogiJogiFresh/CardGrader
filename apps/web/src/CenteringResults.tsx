@@ -59,6 +59,26 @@ interface AnnotationDrag {
   pointerId: number;
 }
 
+interface InspectionPointer {
+  pane: HTMLDivElement;
+  x: number;
+  y: number;
+}
+
+interface PendingAnnotation {
+  pointerId: number;
+  startX: number;
+  startY: number;
+}
+
+interface InspectionPinch {
+  pointerIds: [number, number];
+  startCenter: Point;
+  startDistance: number;
+  startPan: Point;
+  startZoom: number;
+}
+
 interface SideSnapshot {
   capture: Capture;
   guides: EditableGuides;
@@ -71,6 +91,7 @@ interface SideSnapshot {
 
 const ZOOM_PREVIEW_SIZE = 144;
 const ZOOM_SCALE = 3.5;
+const ANNOTATION_DRAG_THRESHOLD = 4;
 const INSPECTION_FILTERS: { value: InspectionFilter; label: string }[] = [
   { value: 'original', label: 'Original' },
   { value: 'negative', label: 'Negative' },
@@ -570,10 +591,14 @@ function EditableCenteringCard({
   const [annotationMarkerSize, setAnnotationMarkerSize] = useState(26);
   const [inspectionZoom, setInspectionZoom] = useState(1);
   const [inspectionPan, setInspectionPan] = useState({ x: 0, y: 0 });
-  const [inspectionDrag, setInspectionDrag] =
-    useState<InspectionViewDrag | null>(null);
-  const [annotationDrag, setAnnotationDrag] =
-    useState<AnnotationDrag | null>(null);
+  const inspectionDragRef = useRef<InspectionViewDrag | null>(null);
+  const annotationDragRef = useRef<AnnotationDrag | null>(null);
+  const inspectionPointersRef = useRef(
+    new Map<number, InspectionPointer>(),
+  );
+  const pendingAnnotationRef = useRef<PendingAnnotation | null>(null);
+  const inspectionPinchRef = useRef<InspectionPinch | null>(null);
+  const suppressTouchRef = useRef(false);
   const percentages = useMemo(() => calculatePercentages(guides), [guides]);
   const horizontalStatus = balanceStatus(percentages.horizontal.first);
   const verticalStatus = balanceStatus(percentages.vertical.first);
@@ -780,6 +805,33 @@ function EditableCenteringCard({
     if (event.button !== 0) return;
     event.preventDefault();
     const pane = event.currentTarget;
+    if (event.pointerType === 'touch') {
+      inspectionPointersRef.current.set(event.pointerId, {
+        pane,
+        x: event.clientX,
+        y: event.clientY,
+      });
+      pane.setPointerCapture(event.pointerId);
+
+      if (touchPointersForPane(pane).length >= 2) {
+        beginInspectionPinch(pane);
+        return;
+      }
+
+      if (suppressTouchRef.current) {
+        return;
+      }
+
+      if (originalPane) {
+        pendingAnnotationRef.current = {
+          pointerId: event.pointerId,
+          startX: event.clientX,
+          startY: event.clientY,
+        };
+        return;
+      }
+    }
+
     const shouldPlaceAnnotation =
       originalPane && (event.pointerType !== 'mouse' || event.ctrlKey);
     if (shouldPlaceAnnotation) {
@@ -792,23 +844,91 @@ function EditableCenteringCard({
       );
       const annotationId = addAnnotationAt(point.x, point.y);
       pane.setPointerCapture(event.pointerId);
-      setAnnotationDrag({
+      annotationDragRef.current = {
         annotationId,
         pointerId: event.pointerId,
-      });
+      };
       return;
     }
     pane.setPointerCapture(event.pointerId);
-    setInspectionDrag({
+    inspectionDragRef.current = {
       pointerId: event.pointerId,
       startX: event.clientX,
       startY: event.clientY,
       panX: inspectionPan.x,
       panY: inspectionPan.y,
-    });
+    };
   }
 
   function moveInspection(event: ReactPointerEvent<HTMLDivElement>) {
+    if (event.pointerType === 'touch') {
+      const activePointer = inspectionPointersRef.current.get(event.pointerId);
+      if (activePointer) {
+        inspectionPointersRef.current.set(event.pointerId, {
+          ...activePointer,
+          x: event.clientX,
+          y: event.clientY,
+        });
+      }
+
+      const pinch = inspectionPinchRef.current;
+      if (pinch?.pointerIds.includes(event.pointerId)) {
+        const [first, second] = pinch.pointerIds.map((pointerId) =>
+          inspectionPointersRef.current.get(pointerId),
+        );
+        if (first && second) {
+          const nextDistance = distanceBetweenPointers(first, second);
+          const nextCenter = centerBetweenPointers(first, second);
+          const nextZoom = clamp(
+            pinch.startZoom * (nextDistance / pinch.startDistance),
+            1,
+            4,
+          );
+          const rectangle = event.currentTarget.getBoundingClientRect();
+          setInspectionZoom(nextZoom);
+          setInspectionPan(
+            clampPan(
+              {
+                x:
+                  pinch.startPan.x +
+                  (nextCenter.x - pinch.startCenter.x),
+                y:
+                  pinch.startPan.y +
+                  (nextCenter.y - pinch.startCenter.y),
+              },
+              nextZoom,
+              rectangle.width,
+              rectangle.height,
+            ),
+          );
+        }
+        return;
+      }
+
+      const pending = pendingAnnotationRef.current;
+      if (
+        pending?.pointerId === event.pointerId &&
+        Math.hypot(
+          event.clientX - pending.startX,
+          event.clientY - pending.startY,
+        ) >= ANNOTATION_DRAG_THRESHOLD
+      ) {
+        const point = inspectionPoint(
+          event.clientX,
+          event.clientY,
+          event.currentTarget.getBoundingClientRect(),
+          inspectionZoom,
+          inspectionPan,
+        );
+        annotationDragRef.current = {
+          annotationId: addAnnotationAt(point.x, point.y),
+          pointerId: event.pointerId,
+        };
+        pendingAnnotationRef.current = null;
+      }
+    }
+
+    const annotationDrag = annotationDragRef.current;
     if (annotationDrag?.pointerId === event.pointerId) {
       const point = inspectionPoint(
         event.clientX,
@@ -831,6 +951,7 @@ function EditableCenteringCard({
       return;
     }
 
+    const inspectionDrag = inspectionDragRef.current;
     if (!inspectionDrag || inspectionDrag.pointerId !== event.pointerId) return;
     const rectangle = event.currentTarget.getBoundingClientRect();
     setInspectionPan(
@@ -849,18 +970,114 @@ function EditableCenteringCard({
   }
 
   function endInspection(event: ReactPointerEvent<HTMLDivElement>) {
+    finishInspectionInteraction(event, false);
+  }
+
+  function cancelInspection(event: ReactPointerEvent<HTMLDivElement>) {
+    finishInspectionInteraction(event, true);
+  }
+
+  function finishInspectionInteraction(
+    event: ReactPointerEvent<HTMLDivElement>,
+    cancelled: boolean,
+  ) {
+    const pending = pendingAnnotationRef.current;
+    const pinch = inspectionPinchRef.current;
+    if (
+      !cancelled &&
+      pending?.pointerId === event.pointerId &&
+      !pinch
+    ) {
+      const point = inspectionPoint(
+        event.clientX,
+        event.clientY,
+        event.currentTarget.getBoundingClientRect(),
+        inspectionZoom,
+        inspectionPan,
+      );
+      addAnnotationAt(point.x, point.y);
+    }
+    if (pending?.pointerId === event.pointerId) {
+      pendingAnnotationRef.current = null;
+    }
+
+    inspectionPointersRef.current.delete(event.pointerId);
+    if (pinch?.pointerIds.includes(event.pointerId)) {
+      inspectionPinchRef.current = null;
+      suppressTouchRef.current = inspectionPointersRef.current.size > 0;
+    }
+    if (inspectionPointersRef.current.size === 0) {
+      suppressTouchRef.current = false;
+    }
+
+    const annotationDrag = annotationDragRef.current;
+    const inspectionDrag = inspectionDragRef.current;
     const annotationEnded = annotationDrag?.pointerId === event.pointerId;
     const panEnded = inspectionDrag?.pointerId === event.pointerId;
-    if (!annotationEnded && !panEnded) return;
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
     if (annotationEnded) {
-      setAnnotationDrag(null);
+      annotationDragRef.current = null;
     }
     if (panEnded) {
-      setInspectionDrag(null);
+      inspectionDragRef.current = null;
     }
+  }
+
+  function touchPointersForPane(pane: HTMLDivElement) {
+    return Array.from(inspectionPointersRef.current.entries()).filter(
+      ([, pointer]) => pointer.pane === pane,
+    );
+  }
+
+  function beginInspectionPinch(pane: HTMLDivElement) {
+    const pointers = touchPointersForPane(pane).slice(0, 2);
+    if (pointers.length < 2) return;
+    const [[firstId, first], [secondId, second]] = pointers;
+    pendingAnnotationRef.current = null;
+    annotationDragRef.current = null;
+    inspectionDragRef.current = null;
+    suppressTouchRef.current = true;
+    inspectionPinchRef.current = {
+      pointerIds: [firstId, secondId],
+      startCenter: centerBetweenPointers(first, second),
+      startDistance: Math.max(1, distanceBetweenPointers(first, second)),
+      startPan: inspectionPan,
+      startZoom: inspectionZoom,
+    };
+  }
+
+  function beginMarkerInteraction(
+    event: ReactPointerEvent<HTMLButtonElement>,
+    annotationId: string,
+  ) {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const pane = event.currentTarget.closest(
+      '.inspection-pane',
+    ) as HTMLDivElement | null;
+    if (event.pointerType === 'touch' && pane) {
+      inspectionPointersRef.current.set(event.pointerId, {
+        pane,
+        x: event.clientX,
+        y: event.clientY,
+      });
+      event.currentTarget.setPointerCapture(event.pointerId);
+      if (touchPointersForPane(pane).length >= 2) {
+        beginInspectionPinch(pane);
+        return;
+      }
+      if (suppressTouchRef.current) {
+        return;
+      }
+    }
+    event.currentTarget.setPointerCapture(event.pointerId);
+    annotationDragRef.current = {
+      annotationId,
+      pointerId: event.pointerId,
+    };
   }
 
   function zoomInspection(nextZoom: number) {
@@ -1089,10 +1306,10 @@ function EditableCenteringCard({
         <div className="inspection-comparison">
           <figure>
             <figcaption>
-              Original · Tap or drag to place a marker
+              Original · One finger marks · two fingers zoom
             </figcaption>
             <div
-              aria-label={`${viewTitle(measurement.viewId)} original inspection pane. Tap or drag on a touchscreen to place a marker. Mouse users can hold Control and click or drag. Press Enter to place a marker at the view center.`}
+              aria-label={`${viewTitle(measurement.viewId)} original inspection pane. Tap or drag with one finger to place a marker, or pinch with two fingers to zoom. Mouse users can hold Control and click or drag. Press Enter to place a marker at the view center.`}
               className="inspection-pane"
               onContextMenu={(event) => {
                 if (event.ctrlKey) {
@@ -1100,7 +1317,7 @@ function EditableCenteringCard({
                 }
               }}
               onKeyDown={keyboardAnnotate}
-              onPointerCancel={endInspection}
+              onPointerCancel={cancelInspection}
               onPointerDown={(event) =>
                 beginInspectionInteraction(event, true)
               }
@@ -1138,16 +1355,9 @@ function EditableCenteringCard({
                         );
                       }
                     }}
-                    onPointerDown={(event) => {
-                      if (event.button !== 0) return;
-                      event.preventDefault();
-                      event.stopPropagation();
-                      event.currentTarget.setPointerCapture(event.pointerId);
-                      setAnnotationDrag({
-                        annotationId: annotation.id,
-                        pointerId: event.pointerId,
-                      });
-                    }}
+                    onPointerDown={(event) =>
+                      beginMarkerInteraction(event, annotation.id)
+                    }
                     style={{
                       fontSize: `${Math.max(7, annotationMarkerSize * 0.38)}px`,
                       height: `${annotationMarkerSize}px`,
@@ -1168,11 +1378,12 @@ function EditableCenteringCard({
             <figcaption>
               Preview · {INSPECTION_FILTERS.find((item) => item.value === filter)?.label}
               {perspectiveCorrected ? ' · corrected' : ''}
+              {' · pinch to zoom'}
             </figcaption>
             <div
-              aria-label={`${viewTitle(measurement.viewId)} filtered preview. Drag to pan and use the zoom controls above.`}
+              aria-label={`${viewTitle(measurement.viewId)} filtered preview. Drag with one finger to pan, pinch with two fingers to zoom, or use the zoom controls above.`}
               className="inspection-pane"
-              onPointerCancel={endInspection}
+              onPointerCancel={cancelInspection}
               onPointerDown={(event) =>
                 beginInspectionInteraction(event, false)
               }
@@ -1208,7 +1419,17 @@ function EditableCenteringCard({
         </div>
 
         <section className="annotation-editor" aria-labelledby={`annotations-${capture.id}`}>
-          <h4 id={`annotations-${capture.id}`}>Blemish annotations</h4>
+          <div className="annotation-heading">
+            <h4 id={`annotations-${capture.id}`}>Blemish annotations</h4>
+            <button
+              className="secondary compact-button"
+              disabled={annotations.length === 0}
+              onClick={() => setAnnotations([])}
+              type="button"
+            >
+              Clear all
+            </button>
+          </div>
           <div className="annotation-fields">
             <label>
               Type
@@ -1254,12 +1475,13 @@ function EditableCenteringCard({
             </label>
           </div>
           <p className="annotation-help">
-            On a touchscreen, tap the original image to add the selected
-            blemish or keep touching and drag for precise placement. You can
-            also drag an existing marker. Mouse users can hold Ctrl and click
-            or drag. Right-click a marker to remove it, or use the Delete
-            control below. For keyboard use, focus the original image and press
-            Enter or Space to add at the center.
+            On the original image, use one finger to tap and add the selected
+            blemish or drag for precise placement. Pinch with two fingers on
+            either image to zoom without creating a marker. Existing markers
+            can also be dragged. Mouse users can hold Ctrl and click or drag.
+            Remove one marker with its Delete control or use Clear all. For
+            keyboard use, focus the original image and press Enter or Space to
+            add at the center.
           </p>
           {annotations.length === 0 ? (
             <p>No blemishes marked.</p>
@@ -1349,6 +1571,23 @@ function inspectionPoint(
     y:
       ((clientY - centerY - pan.y) / zoom + rectangle.height / 2) /
       rectangle.height,
+  };
+}
+
+function distanceBetweenPointers(
+  first: InspectionPointer,
+  second: InspectionPointer,
+): number {
+  return Math.hypot(second.x - first.x, second.y - first.y);
+}
+
+function centerBetweenPointers(
+  first: InspectionPointer,
+  second: InspectionPointer,
+): Point {
+  return {
+    x: (first.x + second.x) / 2,
+    y: (first.y + second.y) / 2,
   };
 }
 

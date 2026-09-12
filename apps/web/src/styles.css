@@ -1288,6 +1288,17 @@ figcaption select {
   background: #0d1921;
 }
 
+.annotation-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.annotation-heading h4 {
+  margin: 0;
+}
+
 .annotation-fields {
   display: grid;
   gap: 9px;
