@@ -40,7 +40,8 @@ touch or mouse. Each corner moves independently to follow slight perspective or
 rotation, recalculating left/right and top/bottom percentages in real time. Each
 image can be reset to automatic detection. Users can adjust guide opacity and
 corner-handle size. A toggleable magnified preview appears while dragging so the
-active corner can be aligned more precisely.
+active corner can be aligned more precisely, with horizontal and vertical
+crosshairs extending to the edge of the preview circle.
 
 The centering result also includes a local inspection workspace with original,
 negative, grayscale, contrast-enhanced, and edge-detail views; image-quality
@@ -55,7 +56,8 @@ can also be dragged. A second finger cancels pending marker placement and starts
 synchronized pinch zoom, so pinching never creates a blemish. Mouse users can
 still hold Ctrl and click or drag. Markers can be removed individually or all at
 once with Clear all. Marker size is adjustable per card side, and touch-friendly
-minus/plus buttons and a range control remain available for zoom.
+minus/plus buttons and a range control remain available for zoom. Marker
+opacity is also adjustable per card side.
 
 After both sides are analyzed, users can compare their centering and manually
 marked blemishes against PSA, TAG, CGC, or Beckett/BGS criteria. The app reports

@@ -223,18 +223,18 @@ body {
 
 .centering-zoom-crosshair::before {
   top: 50%;
-  left: -16px;
-  width: 42px;
+  left: 50%;
+  width: 136px;
   height: 2px;
-  transform: translateY(-50%);
+  transform: translate(-50%, -50%);
 }
 
 .centering-zoom-crosshair::after {
-  top: -16px;
+  top: 50%;
   left: 50%;
   width: 2px;
-  height: 42px;
-  transform: translateX(-50%);
+  height: 136px;
+  transform: translate(-50%, -50%);
 }
 
 button,
@@ -1308,6 +1308,11 @@ figcaption select {
 }
 
 .annotation-fields {
+  display: grid;
+  gap: 9px;
+}
+
+.annotation-marker-controls {
   display: grid;
   gap: 9px;
 }

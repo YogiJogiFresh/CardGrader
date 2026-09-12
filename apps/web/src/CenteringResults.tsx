@@ -589,6 +589,7 @@ function EditableCenteringCard({
     useState<BlemishAnnotation['type']>('scratch');
   const [annotationNote, setAnnotationNote] = useState('');
   const [annotationMarkerSize, setAnnotationMarkerSize] = useState(26);
+  const [annotationMarkerOpacity, setAnnotationMarkerOpacity] = useState(100);
   const [inspectionZoom, setInspectionZoom] = useState(1);
   const [inspectionPan, setInspectionPan] = useState({ x: 0, y: 0 });
   const inspectionDragRef = useRef<InspectionViewDrag | null>(null);
@@ -1373,6 +1374,7 @@ function EditableCenteringCard({
                             )}px`,
                       height: `${annotationMarkerSize}px`,
                       left: `${annotation.x * 100}%`,
+                      opacity: annotationMarkerOpacity / 100,
                       top: `${annotation.y * 100}%`,
                       width: `${annotationMarkerSize}px`,
                     }}
@@ -1468,22 +1470,41 @@ function EditableCenteringCard({
                 value={annotationNote}
               />
             </label>
-            <label>
-              Marker size
-              <span className="annotation-size-control">
-                <input
-                  aria-label={`${viewTitle(measurement.viewId)} annotation marker size`}
-                  max="48"
-                  min="8"
-                  onChange={(event) =>
-                    setAnnotationMarkerSize(Number(event.target.value))
-                  }
-                  type="range"
-                  value={annotationMarkerSize}
-                />
-                <strong>{annotationMarkerSize}px</strong>
-              </span>
-            </label>
+            <div className="annotation-marker-controls">
+              <label>
+                Marker size
+                <span className="annotation-size-control">
+                  <input
+                    aria-label={`${viewTitle(measurement.viewId)} annotation marker size`}
+                    max="48"
+                    min="8"
+                    onChange={(event) =>
+                      setAnnotationMarkerSize(Number(event.target.value))
+                    }
+                    type="range"
+                    value={annotationMarkerSize}
+                  />
+                  <strong>{annotationMarkerSize}px</strong>
+                </span>
+              </label>
+              <label>
+                Marker opacity
+                <span className="annotation-size-control">
+                  <input
+                    aria-label={`${viewTitle(measurement.viewId)} annotation marker opacity`}
+                    max="100"
+                    min="20"
+                    onChange={(event) =>
+                      setAnnotationMarkerOpacity(Number(event.target.value))
+                    }
+                    step="5"
+                    type="range"
+                    value={annotationMarkerOpacity}
+                  />
+                  <strong>{annotationMarkerOpacity}%</strong>
+                </span>
+              </label>
+            </div>
           </div>
           <p className="annotation-help">
             On the original image, use one finger to tap and add the selected
