@@ -1359,7 +1359,18 @@ function EditableCenteringCard({
                       beginMarkerInteraction(event, annotation.id)
                     }
                     style={{
-                      fontSize: `${Math.max(7, annotationMarkerSize * 0.38)}px`,
+                      borderWidth: annotationMarkerSize < 14 ? '1px' : '2px',
+                      fontSize:
+                        annotationMarkerSize < 14
+                          ? '0'
+                          : `${Math.min(
+                              12,
+                              Math.max(
+                                6,
+                                annotationMarkerSize *
+                                  (index >= 9 ? 0.26 : 0.34),
+                              ),
+                            )}px`,
                       height: `${annotationMarkerSize}px`,
                       left: `${annotation.x * 100}%`,
                       top: `${annotation.y * 100}%`,
@@ -1368,7 +1379,7 @@ function EditableCenteringCard({
                     title="Drag to reposition; right-click to remove"
                     type="button"
                   >
-                    {index + 1}
+                    {annotationMarkerSize >= 14 ? index + 1 : null}
                   </button>
                 ))}
               </div>

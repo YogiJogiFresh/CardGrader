@@ -1255,10 +1255,17 @@ figcaption select {
 .blemish-marker {
   position: absolute;
   z-index: 3;
+  box-sizing: border-box;
   display: grid;
   place-items: center;
   width: 26px;
   height: 26px;
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  overflow: hidden;
+  appearance: none;
+  aspect-ratio: 1;
   border: 2px solid #ffffff;
   border-radius: 50%;
   background: #d92d20;
@@ -1266,6 +1273,7 @@ figcaption select {
   font-size: 0.72rem;
   font-weight: 900;
   line-height: 1;
+  white-space: nowrap;
   box-shadow: 0 2px 8px rgb(0 0 0 / 70%);
   cursor: context-menu;
   pointer-events: auto;
