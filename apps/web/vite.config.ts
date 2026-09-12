@@ -33,7 +33,9 @@ export default defineConfig(({ mode }) => {
           ],
         },
         workbox: {
+          clientsClaim: true,
           navigateFallback: `${base}index.html`,
+          skipWaiting: true,
           runtimeCaching: [
             {
               urlPattern: new RegExp(`${base}models/`),

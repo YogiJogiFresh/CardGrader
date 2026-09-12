@@ -301,9 +301,21 @@ p {
 }
 
 .update {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
   margin-bottom: 20px;
   background: #483b18;
   color: #ffe6a5;
+}
+
+.update .secondary {
+  flex: 0 0 auto;
+}
+
+.update span {
+  min-width: 0;
 }
 
 .camera-panel {
@@ -983,6 +995,11 @@ figcaption select {
 }
 
 @media (max-width: 520px) {
+  .update {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
   .capture-method-options {
     grid-template-columns: 1fr;
   }

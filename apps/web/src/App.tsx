@@ -70,6 +70,8 @@ export function App() {
     message: string;
   } | null>(null);
   const [updateAvailable, setUpdateAvailable] = useState(false);
+  const [isApplyingUpdate, setIsApplyingUpdate] = useState(false);
+  const [updateError, setUpdateError] = useState<string | null>(null);
   const assignedViewIds = new Set(
     captures.map((capture) => capture.viewId),
   );
@@ -81,11 +83,37 @@ export function App() {
     assignedViewIds.has('back-straight');
 
   useEffect(() => {
-    const onUpdate = () => setUpdateAvailable(true);
+    const onUpdate = () => {
+      setUpdateAvailable(true);
+      setIsApplyingUpdate(false);
+      setUpdateError(null);
+    };
+    const onUpdateError = (event: Event) => {
+      setIsApplyingUpdate(false);
+      setUpdateError(
+        event instanceof CustomEvent && typeof event.detail === 'string'
+          ? event.detail
+          : 'The update could not be applied.',
+      );
+    };
     window.addEventListener('cardgrader:update-available', onUpdate);
-    return () =>
+    window.addEventListener('cardgrader:update-error', onUpdateError);
+    if (
+      document.documentElement.dataset.cardgraderUpdateAvailable === 'true'
+    ) {
+      onUpdate();
+    }
+    return () => {
       window.removeEventListener('cardgrader:update-available', onUpdate);
+      window.removeEventListener('cardgrader:update-error', onUpdateError);
+    };
   }, []);
+
+  function applyUpdate() {
+    setIsApplyingUpdate(true);
+    setUpdateError(null);
+    window.dispatchEvent(new Event('cardgrader:apply-update'));
+  }
 
   useEffect(() => {
     if (camera.status === 'ready' && videoRef.current) {
@@ -530,6 +558,12 @@ export function App() {
           onNavigate={navigateToSection}
         />
         <main className="shell completion">
+          <PwaUpdateBanner
+            error={updateError}
+            isApplying={isApplyingUpdate}
+            onUpdate={applyUpdate}
+            visible={updateAvailable}
+          />
           <p className="eyebrow">CAPTURE COMPLETE</p>
           <h1>{captures.length} views collected</h1>
           <p>
@@ -595,11 +629,12 @@ export function App() {
     <>
       <WorkflowShortcuts items={shortcutItems} onNavigate={navigateToSection} />
       <main className="shell">
-        {updateAvailable ? (
-          <div className="update">
-            A new version is available. Finish this capture before refreshing.
-          </div>
-        ) : null}
+        <PwaUpdateBanner
+          error={updateError}
+          isApplying={isApplyingUpdate}
+          onUpdate={applyUpdate}
+          visible={updateAvailable}
+        />
         <header>
           <p className="eyebrow">
             VIEW {captures.length + 1} OF {CAPTURE_STEPS.length}
@@ -852,6 +887,41 @@ export function App() {
         </footer>
       </main>
     </>
+  );
+}
+
+function PwaUpdateBanner({
+  error,
+  isApplying,
+  onUpdate,
+  visible,
+}: {
+  error: string | null;
+  isApplying: boolean;
+  onUpdate: () => void;
+  visible: boolean;
+}) {
+  if (!visible && !error) {
+    return null;
+  }
+
+  return (
+    <div className="update" role={error ? 'alert' : 'status'}>
+      <span>
+        {error ??
+          'A new version is ready. Updating reloads the app and clears the current unsaved capture.'}
+      </span>
+      {visible ? (
+        <button
+          className="secondary compact-button"
+          disabled={isApplying}
+          onClick={onUpdate}
+          type="button"
+        >
+          {isApplying ? 'Updating…' : 'Update now'}
+        </button>
+      ) : null}
+    </div>
   );
 }
 

@@ -64,6 +64,12 @@ published rubric. It does not claim to reproduce an official grade or TAG's
 proprietary score. The grade estimate and local export actions each have their
 own collapsible result section.
 
+The service worker checks for updates on startup and whenever the app returns
+to the foreground. New workers activate and claim the app immediately so a hard
+refresh cannot remain pinned to an obsolete cached shell. When an update prompt
+is available, **Update now** applies it and reloads the page; any active,
+unexported capture is discarded.
+
 ## Current milestone
 
 The repository contains the Expo SDK 57 mobile scaffold, a six-view capture
