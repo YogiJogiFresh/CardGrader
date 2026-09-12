@@ -30,10 +30,10 @@ is a centering estimate only; no grade prediction is produced. Grade prediction
 is deferred from the current PWA milestone.
 
 If automatic card-edge detection cannot separate the card from its background,
-camera captures can continue with an explicit override. The app maps the guide
-shown over the camera preview into the full-resolution photo, uses it as the
-initial cyan card-edge overlay, and lets the user adjust all four corners before
-relying on the estimate.
+the user can continue with fully manual overlays without running detection
+again. Camera captures use the mapped framing guide when available; uploads and
+other captures receive a centered card-shaped starting guide. Both the cyan
+card edge and yellow inner frame remain adjustable before using the estimate.
 
 The cyan outer-card and yellow inner-frame overlays are directly editable with
 touch or mouse. Each corner moves independently to follow slight perspective or

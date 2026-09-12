@@ -16,9 +16,9 @@ import {
 
 import {
   analyzeCentering,
-  analyzeCenteringWithOuterBounds,
   CenteringBounds,
   CenteringMeasurement,
+  createManualCenteringMeasurement,
 } from './centering';
 import { CenteringResults } from './CenteringResults';
 
@@ -408,7 +408,7 @@ export function App() {
     setFailedCenteringCaptureIds([]);
   }
 
-  async function calculateCentering(useCameraGuides = false) {
+  async function calculateCentering(useManualOverlays = false) {
     const straightCaptures = ['front-straight', 'back-straight'].map(
       (viewId) =>
         captures.find((capture) => capture.viewId === viewId),
@@ -424,14 +424,23 @@ export function App() {
     setIsAnalyzingCentering(true);
     setCenteringError(null);
     try {
-      const results = await Promise.allSettled(
-        straightCaptures.map((capture) => {
+      if (useManualOverlays) {
+        const measurements = straightCaptures.map((capture) => {
           const resolvedCapture = capture!;
-          const guideBounds = cameraGuideBounds[resolvedCapture.id];
-          return useCameraGuides && guideBounds
-            ? analyzeCenteringWithOuterBounds(resolvedCapture, guideBounds)
-            : analyzeCentering(resolvedCapture);
-        }),
+          return createManualCenteringMeasurement(
+            resolvedCapture,
+            cameraGuideBounds[resolvedCapture.id],
+          );
+        });
+        setFailedCenteringCaptureIds([]);
+        setCenteringMeasurements(measurements);
+        setCenteringOpen(true);
+        scrollToSection(centeringSectionRef);
+        return;
+      }
+
+      const results = await Promise.allSettled(
+        straightCaptures.map((capture) => analyzeCentering(capture!)),
       );
       const failedIds = results.flatMap((result, index) =>
         result.status === 'rejected' ? [straightCaptures[index]!.id] : [],
@@ -568,10 +577,7 @@ export function App() {
             isAnalyzing={isAnalyzingCentering}
             measurements={centeringMeasurements}
             canOverride={
-              failedCenteringCaptureIds.length > 0 &&
-              failedCenteringCaptureIds.every(
-                (captureId) => cameraGuideBounds[captureId],
-              )
+              failedCenteringCaptureIds.length > 0
             }
             onCalculate={() => void calculateCentering()}
             onOverride={() => void calculateCentering(true)}
@@ -832,10 +838,7 @@ export function App() {
             isAnalyzing={isAnalyzingCentering}
             measurements={centeringMeasurements}
             canOverride={
-              failedCenteringCaptureIds.length > 0 &&
-              failedCenteringCaptureIds.every(
-                (captureId) => cameraGuideBounds[captureId],
-              )
+              failedCenteringCaptureIds.length > 0
             }
             onCalculate={() => void calculateCentering()}
             onOverride={() => void calculateCentering(true)}
@@ -1041,9 +1044,10 @@ function CenteringAnalysisPanel({
           {canOverride ? (
             <div className="centering-override">
               <p>
-                Continue with the guide that was visible over the camera
-                preview. It will become the cyan card-edge overlay and can be
-                adjusted before using the estimate.
+                Continue without automatic detection. Camera captures start
+                with the framing guide when available; otherwise a centered
+                card-shaped guide is provided. Set the cyan card edge and
+                yellow inner frame manually before using the estimate.
               </p>
               <button
                 className="secondary"
@@ -1051,7 +1055,7 @@ function CenteringAnalysisPanel({
                 onClick={onOverride}
                 type="button"
               >
-                Use camera guides and continue
+                Continue with manual overlays
               </button>
             </div>
           ) : null}

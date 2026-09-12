@@ -906,8 +906,20 @@ function EditableCenteringCard({
     >
       <div className="centering-card-heading">
         <h3>{viewTitle(measurement.viewId)}</h3>
-        <span className={manuallyAdjusted ? 'manual-badge' : 'automatic-badge'}>
-          {manuallyAdjusted ? 'Manually adjusted' : 'Automatic detection'}
+        <span
+          className={
+            measurement.method === 'manual' || manuallyAdjusted
+              ? 'manual-badge'
+              : 'automatic-badge'
+          }
+        >
+          {measurement.method === 'manual'
+            ? manuallyAdjusted
+              ? 'Manual overlay adjusted'
+              : 'Manual overlay'
+            : manuallyAdjusted
+              ? 'Manually adjusted'
+              : 'Automatic detection'}
         </span>
       </div>
       <div
@@ -959,8 +971,16 @@ function EditableCenteringCard({
           </strong>
         </div>
         <div>
-          <span>Automatic confidence</span>
-          <strong>{Math.round(measurement.confidence * 100)}%</strong>
+          <span>
+            {measurement.method === 'manual'
+              ? 'Guide source'
+              : 'Automatic confidence'}
+          </span>
+          <strong>
+            {measurement.method === 'manual'
+              ? 'Manual'
+              : `${Math.round(measurement.confidence * 100)}%`}
+          </strong>
         </div>
       </div>
       <button
@@ -969,7 +989,10 @@ function EditableCenteringCard({
         onClick={resetGuides}
         type="button"
       >
-        Reset guides to automatic detection
+        Reset guides to{' '}
+        {measurement.method === 'manual'
+          ? 'manual starting position'
+          : 'automatic detection'}
       </button>
       {measurement.warnings.map((warning) => (
         <p className="centering-warning" key={warning}>

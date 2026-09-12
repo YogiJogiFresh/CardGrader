@@ -12,6 +12,7 @@ export interface CenteringBounds {
 export interface CenteringMeasurement {
   captureId: string;
   viewId: Capture['viewId'];
+  method: 'automatic' | 'manual';
   outerBounds: CenteringBounds;
   innerBounds: CenteringBounds;
   horizontal: {
@@ -26,22 +27,35 @@ export interface CenteringMeasurement {
   warnings: string[];
 }
 
+export function createManualCenteringMeasurement(
+  capture: Capture,
+  outerBounds = defaultManualOuterBounds(capture),
+): CenteringMeasurement {
+  const innerBounds = insetBounds(outerBounds, 0.08);
+
+  return {
+    captureId: capture.id,
+    viewId: capture.viewId,
+    method: 'manual',
+    outerBounds,
+    innerBounds,
+    horizontal: {
+      leftPercent: 50,
+      rightPercent: 50,
+    },
+    vertical: {
+      topPercent: 50,
+      bottomPercent: 50,
+    },
+    confidence: 0,
+    warnings: [
+      'Automatic edge detection was skipped. Set every cyan corner to the card edge and every yellow corner to the inner frame before relying on the estimate.',
+    ],
+  };
+}
+
 export async function analyzeCentering(
   capture: Capture,
-): Promise<CenteringMeasurement> {
-  return analyzeCenteringImage(capture);
-}
-
-export async function analyzeCenteringWithOuterBounds(
-  capture: Capture,
-  outerBounds: CenteringBounds,
-): Promise<CenteringMeasurement> {
-  return analyzeCenteringImage(capture, outerBounds);
-}
-
-async function analyzeCenteringImage(
-  capture: Capture,
-  outerBoundsOverride?: CenteringBounds,
 ): Promise<CenteringMeasurement> {
   const image = await loadImage(capture.uri);
   const scale = Math.min(
@@ -71,23 +85,14 @@ async function analyzeCenteringImage(
     3,
   );
 
-  const outerLeft = outerBoundsOverride
-    ? peakFromFraction(outerBoundsOverride.left, width)
-    : findPeak(verticalProjection, 0.01, 0.44);
-  const outerRight = outerBoundsOverride
-    ? peakFromFraction(outerBoundsOverride.right, width)
-    : findPeak(verticalProjection, 0.56, 0.99);
-  const outerTop = outerBoundsOverride
-    ? peakFromFraction(outerBoundsOverride.top, height)
-    : findPeak(horizontalProjection, 0.01, 0.44);
-  const outerBottom = outerBoundsOverride
-    ? peakFromFraction(outerBoundsOverride.bottom, height)
-    : findPeak(horizontalProjection, 0.56, 0.99);
+  const outerLeft = findPeak(verticalProjection, 0.01, 0.44);
+  const outerRight = findPeak(verticalProjection, 0.56, 0.99);
+  const outerTop = findPeak(horizontalProjection, 0.01, 0.44);
+  const outerBottom = findPeak(horizontalProjection, 0.56, 0.99);
 
-  const minimumOuterFraction = outerBoundsOverride ? 0.1 : 0.35;
   if (
-    outerRight.index - outerLeft.index < width * minimumOuterFraction ||
-    outerBottom.index - outerTop.index < height * minimumOuterFraction
+    outerRight.index - outerLeft.index < width * 0.35 ||
+    outerBottom.index - outerTop.index < height * 0.35
   ) {
     throw new Error(
       'The card edges could not be separated from the background. Use a contrasting background and keep the full card visible.',
@@ -123,32 +128,17 @@ async function analyzeCenteringImage(
   const bottomMargin = outerBottom.index - innerBottom.index;
   const horizontal = percentages(leftMargin, rightMargin);
   const vertical = percentages(topMargin, bottomMargin);
-  const confidence = average(
-    outerBoundsOverride
-      ? [
-          innerLeft.confidence,
-          innerRight.confidence,
-          innerTop.confidence,
-          innerBottom.confidence,
-        ]
-      : [
-          outerLeft.confidence,
-          outerRight.confidence,
-          outerTop.confidence,
-          outerBottom.confidence,
-          innerLeft.confidence,
-          innerRight.confidence,
-          innerTop.confidence,
-          innerBottom.confidence,
-        ],
-  );
+  const confidence = average([
+    outerLeft.confidence,
+    outerRight.confidence,
+    outerTop.confidence,
+    outerBottom.confidence,
+    innerLeft.confidence,
+    innerRight.confidence,
+    innerTop.confidence,
+    innerBottom.confidence,
+  ]);
   const warnings: string[] = [];
-
-  if (outerBoundsOverride) {
-    warnings.push(
-      'Automatic card-edge detection was overridden. The cyan guide starts at the camera framing guide; adjust all four cyan corners to the card edges before relying on the estimate.',
-    );
-  }
 
   if (confidence < 0.5) {
     warnings.push(
@@ -168,6 +158,7 @@ async function analyzeCenteringImage(
   return {
     captureId: capture.id,
     viewId: capture.viewId,
+    method: 'automatic',
     outerBounds: normalizeBounds(
       outerLeft.index,
       outerTop.index,
@@ -197,10 +188,38 @@ async function analyzeCenteringImage(
   };
 }
 
-function peakFromFraction(fraction: number, length: number): Peak {
+function defaultManualOuterBounds(capture: Capture): CenteringBounds {
+  const cardAspect = 2.5 / 3.5;
+  const imageAspect = capture.width / Math.max(1, capture.height);
+  const maximumSize = 0.82;
+  const width =
+    imageAspect > cardAspect
+      ? (maximumSize * cardAspect) / imageAspect
+      : maximumSize;
+  const height =
+    imageAspect > cardAspect
+      ? maximumSize
+      : (maximumSize * imageAspect) / cardAspect;
+
   return {
-    index: clamp(fraction, 0, 1) * length,
-    confidence: 1,
+    left: (1 - width) / 2,
+    top: (1 - height) / 2,
+    right: (1 + width) / 2,
+    bottom: (1 + height) / 2,
+  };
+}
+
+function insetBounds(
+  bounds: CenteringBounds,
+  fraction: number,
+): CenteringBounds {
+  const horizontalInset = (bounds.right - bounds.left) * fraction;
+  const verticalInset = (bounds.bottom - bounds.top) * fraction;
+  return {
+    left: bounds.left + horizontalInset,
+    top: bounds.top + verticalInset,
+    right: bounds.right - horizontalInset,
+    bottom: bounds.bottom - verticalInset,
   };
 }
 
