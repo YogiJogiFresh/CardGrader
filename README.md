@@ -46,10 +46,11 @@ candidate.
 While the camera is open, local frame checks warn about blur, glare,
 overexposure, underexposure, and weak card/background contrast. Capturing takes
 a short three-frame burst and retains only the highest-scoring frame. The
-selected frame is cropped around the camera guide with a small surrounding
-margin large enough for edge searching, so later analysis remains focused
-while retaining visible
-background on every side. No burst frame or diagnostic leaves the browser.
+selected frame is first rendered from the exact `object-fit: cover` viewport
+shown on screen, then cropped around the camera guide with a margin large
+enough for edge searching. The guide and saved image therefore share the same
+coordinate system while retaining visible background on every side. No burst
+frame or diagnostic leaves the browser.
 
 If automatic card-edge detection cannot separate the card from its background,
 the user can continue with fully manual overlays without running detection

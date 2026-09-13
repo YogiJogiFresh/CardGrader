@@ -560,7 +560,8 @@ p {
 
 .card-guide {
   position: absolute;
-  width: 68%;
+  width: auto;
+  height: 78%;
   aspect-ratio: 2.5 / 3.5;
   border: 3px solid #f4b942;
   border-radius: 14px;

@@ -19,6 +19,7 @@ const GUIDANCE_WIDTH = 260;
 export function analyzeVideoFrame(
   video: HTMLVideoElement,
   guideBounds?: CenteringBounds | null,
+  viewportAspectRatio?: number,
 ): CameraGuidance {
   if (video.videoWidth <= 0 || video.videoHeight <= 0) {
     return {
@@ -34,7 +35,11 @@ export function analyzeVideoFrame(
       score: 0,
     };
   }
-  const canvas = downscaledFrame(video, GUIDANCE_WIDTH);
+  const canvas = renderVisibleVideoFrame(
+    video,
+    viewportAspectRatio,
+    GUIDANCE_WIDTH,
+  );
   const context = canvas.getContext('2d', { willReadFrequently: true });
   if (!context) {
     return {
@@ -95,6 +100,7 @@ export function analyzeVideoFrame(
 export async function captureBestFrame(
   video: HTMLVideoElement,
   guideBounds?: CenteringBounds | null,
+  viewportAspectRatio?: number,
   frameCount = 3,
 ): Promise<CapturedFrame> {
   if (video.videoWidth <= 0 || video.videoHeight <= 0) {
@@ -103,14 +109,7 @@ export async function captureBestFrame(
   let bestCanvas: HTMLCanvasElement | null = null;
   let bestScore = -Infinity;
   for (let index = 0; index < frameCount; index += 1) {
-    const canvas = document.createElement('canvas');
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
-    const context = canvas.getContext('2d', { willReadFrequently: true });
-    if (!context) {
-      throw new Error('This browser cannot prepare camera images.');
-    }
-    context.drawImage(video, 0, 0);
+    const canvas = renderVisibleVideoFrame(video, viewportAspectRatio);
     const preview = downscaledCanvas(canvas, GUIDANCE_WIDTH);
     const previewContext = preview.getContext('2d', { willReadFrequently: true });
     if (!previewContext) {
@@ -214,27 +213,50 @@ function cropCanvasToGuide(
   };
 }
 
-function downscaledFrame(
-  source: CanvasImageSource,
-  maximumWidth: number,
+function renderVisibleVideoFrame(
+  video: HTMLVideoElement,
+  viewportAspectRatio?: number,
+  maximumWidth?: number,
 ): HTMLCanvasElement {
-  const sourceWidth =
-    source instanceof HTMLVideoElement
-      ? source.videoWidth
-      : source instanceof HTMLCanvasElement
-        ? source.width
-        : 1;
-  const sourceHeight =
-    source instanceof HTMLVideoElement
-      ? source.videoHeight
-      : source instanceof HTMLCanvasElement
-        ? source.height
-        : 1;
-  const scale = Math.min(1, maximumWidth / Math.max(1, sourceWidth));
+  const sourceWidth = video.videoWidth;
+  const sourceHeight = video.videoHeight;
+  const sourceAspectRatio = sourceWidth / sourceHeight;
+  const targetAspectRatio =
+    viewportAspectRatio && viewportAspectRatio > 0
+      ? viewportAspectRatio
+      : sourceAspectRatio;
+  let sourceX = 0;
+  let sourceY = 0;
+  let visibleWidth = sourceWidth;
+  let visibleHeight = sourceHeight;
+  if (sourceAspectRatio > targetAspectRatio) {
+    visibleWidth = sourceHeight * targetAspectRatio;
+    sourceX = (sourceWidth - visibleWidth) / 2;
+  } else if (sourceAspectRatio < targetAspectRatio) {
+    visibleHeight = sourceWidth / targetAspectRatio;
+    sourceY = (sourceHeight - visibleHeight) / 2;
+  }
+  const scale = maximumWidth
+    ? Math.min(1, maximumWidth / Math.max(1, visibleWidth))
+    : 1;
   const canvas = document.createElement('canvas');
-  canvas.width = Math.max(1, Math.round(sourceWidth * scale));
-  canvas.height = Math.max(1, Math.round(sourceHeight * scale));
-  canvas.getContext('2d')?.drawImage(source, 0, 0, canvas.width, canvas.height);
+  canvas.width = Math.max(1, Math.round(visibleWidth * scale));
+  canvas.height = Math.max(1, Math.round(visibleHeight * scale));
+  const context = canvas.getContext('2d');
+  if (!context) {
+    throw new Error('This browser cannot prepare camera images.');
+  }
+  context.drawImage(
+    video,
+    sourceX,
+    sourceY,
+    visibleWidth,
+    visibleHeight,
+    0,
+    0,
+    canvas.width,
+    canvas.height,
+  );
   return canvas;
 }
 
@@ -242,7 +264,16 @@ function downscaledCanvas(
   source: HTMLCanvasElement,
   maximumWidth: number,
 ): HTMLCanvasElement {
-  return downscaledFrame(source, maximumWidth);
+  const scale = Math.min(1, maximumWidth / Math.max(1, source.width));
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, Math.round(source.width * scale));
+  canvas.height = Math.max(1, Math.round(source.height * scale));
+  const context = canvas.getContext('2d');
+  if (!context) {
+    throw new Error('This browser cannot prepare camera previews.');
+  }
+  context.drawImage(source, 0, 0, canvas.width, canvas.height);
+  return canvas;
 }
 
 function frameMetrics(

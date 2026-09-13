@@ -152,12 +152,14 @@ export function App() {
     const updateGuidance = () => {
       const video = videoRef.current;
       if (!cancelled && video?.videoWidth) {
+        const frame = cameraFrameRef.current;
         const guideBounds = calculateCameraGuideBounds(
-          video,
-          cameraFrameRef.current,
+          frame,
           cameraGuideRef.current,
         );
-        setCameraGuidance(analyzeVideoFrame(video, guideBounds));
+        setCameraGuidance(
+          analyzeVideoFrame(video, guideBounds, elementAspectRatio(frame)),
+        );
       }
       timer = window.setTimeout(updateGuidance, 700);
     };
@@ -251,14 +253,17 @@ export function App() {
       return;
     }
     const guideBounds = calculateCameraGuideBounds(
-      video,
       cameraFrameRef.current,
       cameraGuideRef.current,
     );
     setIsCapturingFrame(true);
     setCameraGuidance(null);
     try {
-      const frame = await captureBestFrame(video, guideBounds);
+      const frame = await captureBestFrame(
+        video,
+        guideBounds,
+        elementAspectRatio(cameraFrameRef.current),
+      );
       addCapture(
         currentStep.id,
         frame.blob,
@@ -1085,11 +1090,10 @@ function scrollToElement(id: string) {
 }
 
 function calculateCameraGuideBounds(
-  video: HTMLVideoElement,
   frame: HTMLDivElement | null,
   guide: HTMLDivElement | null,
 ): CenteringBounds | null {
-  if (!frame || !guide || video.videoWidth <= 0 || video.videoHeight <= 0) {
+  if (!frame || !guide) {
     return null;
   }
 
@@ -1099,29 +1103,27 @@ function calculateCameraGuideBounds(
     return null;
   }
 
-  const scale = Math.max(
-    frameRect.width / video.videoWidth,
-    frameRect.height / video.videoHeight,
-  );
-  const renderedWidth = video.videoWidth * scale;
-  const renderedHeight = video.videoHeight * scale;
-  const renderedLeft = (frameRect.width - renderedWidth) / 2;
-  const renderedTop = (frameRect.height - renderedHeight) / 2;
-
   return {
     left: clampUnit(
-      (guideRect.left - frameRect.left - renderedLeft) / renderedWidth,
+      (guideRect.left - frameRect.left) / frameRect.width,
     ),
     top: clampUnit(
-      (guideRect.top - frameRect.top - renderedTop) / renderedHeight,
+      (guideRect.top - frameRect.top) / frameRect.height,
     ),
     right: clampUnit(
-      (guideRect.right - frameRect.left - renderedLeft) / renderedWidth,
+      (guideRect.right - frameRect.left) / frameRect.width,
     ),
     bottom: clampUnit(
-      (guideRect.bottom - frameRect.top - renderedTop) / renderedHeight,
+      (guideRect.bottom - frameRect.top) / frameRect.height,
     ),
   };
+}
+
+function elementAspectRatio(element: HTMLElement | null): number | undefined {
+  if (!element || element.clientWidth <= 0 || element.clientHeight <= 0) {
+    return undefined;
+  }
+  return element.clientWidth / element.clientHeight;
 }
 
 function clampUnit(value: number): number {
