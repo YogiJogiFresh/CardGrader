@@ -257,13 +257,20 @@ export async function analyzeCentering(
     ? 0.45 + outer.guideScore * 0.55
     : 1;
   const outerReliability = independentReliability * guidePenalty;
-  const confidence = clamp(
+  const confidenceBeforeCalibration = clamp(
     Math.min(
       outerReliability,
       outerReliability * 0.76 + inner.support * 0.24,
     ),
     0,
     1,
+  );
+  const confidence = clamp(
+    confidenceBeforeCalibration ** 1.35 *
+      0.92 *
+      (outer.guidedSearch || !hasCaptureGuide ? 1 : 0.82),
+    0,
+    0.92,
   );
   return {
     captureId: capture.id,
@@ -576,8 +583,17 @@ function detectOuterCandidate(
       guideScore * 0.12 +
       geometryScore * 0.18 +
       areaScore * 0.06;
+  const outputCorners = hasCaptureGuide
+    ? refineGuideCorners(
+        expectedCorners,
+        corners,
+        edgeSupport,
+        geometryScore,
+        guidedSearch,
+      )
+    : corners;
   return {
-    corners,
+    corners: outputCorners,
     score,
     edgeSupport,
     aspectScore,
@@ -585,6 +601,65 @@ function detectOuterCandidate(
     geometryScore,
     guideDistance,
     guidedSearch,
+  };
+}
+
+function refineGuideCorners(
+  guide: CenteringCorners,
+  detected: CenteringCorners,
+  edgeSupport: number,
+  geometryScore: number,
+  guidedSearch: boolean,
+): CenteringCorners {
+  const independentEvidence =
+    clamp((edgeSupport - 0.35) / 0.5, 0, 1) *
+    clamp((geometryScore - 0.35) / 0.65, 0, 1);
+  const refinementStrength =
+    0.08 + independentEvidence * (guidedSearch ? 0.82 : 0.68);
+  const maximumShift = guidedSearch ? 0.075 : 0.1;
+  const refined = {
+    topLeft: refineGuideCorner(
+      guide.topLeft,
+      detected.topLeft,
+      refinementStrength,
+      maximumShift,
+    ),
+    topRight: refineGuideCorner(
+      guide.topRight,
+      detected.topRight,
+      refinementStrength,
+      maximumShift,
+    ),
+    bottomRight: refineGuideCorner(
+      guide.bottomRight,
+      detected.bottomRight,
+      refinementStrength,
+      maximumShift,
+    ),
+    bottomLeft: refineGuideCorner(
+      guide.bottomLeft,
+      detected.bottomLeft,
+      refinementStrength,
+      maximumShift,
+    ),
+  };
+  return isValidCardQuad(refined) ? refined : guide;
+}
+
+function refineGuideCorner(
+  guide: CenteringPoint,
+  detected: CenteringPoint,
+  strength: number,
+  maximumShift: number,
+): CenteringPoint {
+  const deltaX = detected.x - guide.x;
+  const deltaY = detected.y - guide.y;
+  const distance = Math.hypot(deltaX, deltaY);
+  const scale =
+    distance > maximumShift ? maximumShift / distance : 1;
+  return {
+    x: clamp(guide.x + deltaX * scale * strength, 0, 1),
+    y: clamp(guide.y + deltaY * scale * strength, 0, 1),
   };
 }
 

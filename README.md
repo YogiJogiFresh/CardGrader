@@ -34,8 +34,11 @@ and red beyond 60/40.
 For camera captures, the framing guide is the primary outer-edge reference.
 The detector first searches close to the guide, requires independent edge and
 shape support, and reduces confidence when the fitted card disagrees with the
-guide or forms an implausibly skewed quadrilateral. A wider search is used only
-when the close guide search cannot produce a reliable candidate.
+guide or forms an implausibly skewed quadrilateral. Detected corners refine the
+captured guide rather than replacing it outright; the permitted adjustment
+increases only when independent edge and geometry evidence is strong. A wider
+search is used only when the close guide search cannot produce a reliable
+candidate.
 
 While the camera is open, local frame checks warn about blur, glare,
 overexposure, underexposure, and weak card/background contrast. Capturing takes

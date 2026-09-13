@@ -772,7 +772,7 @@ export function App() {
                 >
                   {isCapturingFrame
                     ? 'Selecting sharpest frame…'
-                    : 'Capture this view'}
+                    : `Capture ${currentStep.title}`}
                 </button>
                 <button className="secondary" onClick={stopCamera}>
                   Stop camera
