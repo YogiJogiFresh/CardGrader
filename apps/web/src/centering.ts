@@ -1,6 +1,22 @@
 import { Capture } from '@cardgrader/domain';
 
 const MAX_ANALYSIS_DIMENSION = 1000;
+const CARD_ASPECT = 2.5 / 3.5;
+const RECTIFIED_WIDTH = 280;
+const RECTIFIED_HEIGHT = 392;
+const SCAN_COUNT = 24;
+
+export interface CenteringPoint {
+  x: number;
+  y: number;
+}
+
+export interface CenteringCorners {
+  topLeft: CenteringPoint;
+  topRight: CenteringPoint;
+  bottomRight: CenteringPoint;
+  bottomLeft: CenteringPoint;
+}
 
 export interface CenteringBounds {
   left: number;
@@ -9,12 +25,19 @@ export interface CenteringBounds {
   bottom: number;
 }
 
+export interface CenteringAnalysisOptions {
+  expectedOuterBounds?: CenteringBounds;
+}
+
 export interface CenteringMeasurement {
   captureId: string;
   viewId: Capture['viewId'];
   method: 'automatic' | 'manual';
+  frameType: 'bordered' | 'borderless-or-full-art' | 'uncertain';
   outerBounds: CenteringBounds;
   innerBounds: CenteringBounds;
+  outerCorners?: CenteringCorners;
+  innerCorners?: CenteringCorners;
   horizontal: {
     leftPercent: number;
     rightPercent: number;
@@ -25,6 +48,54 @@ export interface CenteringMeasurement {
   };
   confidence: number;
   warnings: string[];
+  diagnostics?: {
+    candidateScore: number;
+    edgeSupport: number;
+    aspectScore: number;
+    guideScore: number;
+    innerFrameSupport: number;
+  };
+}
+
+interface PixelChannels {
+  luminance: Float32Array;
+  red: Uint8Array;
+  green: Uint8Array;
+  blue: Uint8Array;
+}
+
+interface EdgeMaps {
+  x: Float32Array;
+  y: Float32Array;
+}
+
+interface EdgePoint {
+  x: number;
+  y: number;
+  weight: number;
+}
+
+interface FittedLine {
+  slope: number;
+  intercept: number;
+  support: number;
+}
+
+interface OuterCandidate {
+  corners: CenteringCorners;
+  score: number;
+  edgeSupport: number;
+  aspectScore: number;
+  guideScore: number;
+}
+
+interface InnerFrameDetection {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+  support: number;
+  frameType: CenteringMeasurement['frameType'];
 }
 
 export function createManualCenteringMeasurement(
@@ -32,21 +103,17 @@ export function createManualCenteringMeasurement(
   outerBounds = defaultManualOuterBounds(capture),
 ): CenteringMeasurement {
   const innerBounds = insetBounds(outerBounds, 0.08);
-
   return {
     captureId: capture.id,
     viewId: capture.viewId,
     method: 'manual',
+    frameType: 'uncertain',
     outerBounds,
     innerBounds,
-    horizontal: {
-      leftPercent: 50,
-      rightPercent: 50,
-    },
-    vertical: {
-      topPercent: 50,
-      bottomPercent: 50,
-    },
+    outerCorners: cornersFromBounds(outerBounds),
+    innerCorners: cornersFromBounds(innerBounds),
+    horizontal: { leftPercent: 50, rightPercent: 50 },
+    vertical: { topPercent: 50, bottomPercent: 50 },
     confidence: 0,
     warnings: [
       'Automatic edge detection was skipped. Set every cyan corner to the card edge and every yellow corner to the inner frame before relying on the estimate.',
@@ -56,6 +123,7 @@ export function createManualCenteringMeasurement(
 
 export async function analyzeCentering(
   capture: Capture,
+  options: CenteringAnalysisOptions = {},
 ): Promise<CenteringMeasurement> {
   const image = await loadImage(capture.uri);
   const scale = Math.min(
@@ -68,113 +136,81 @@ export async function analyzeCentering(
   canvas.width = width;
   canvas.height = height;
   const context = canvas.getContext('2d', { willReadFrequently: true });
-
   if (!context) {
     throw new Error('This browser cannot analyze image pixels.');
   }
 
   context.drawImage(image, 0, 0, width, height);
   const pixels = context.getImageData(0, 0, width, height).data;
-  const grayscale = toGrayscale(pixels, width, height);
-  const verticalProjection = smoothProjection(
-    createVerticalEdgeProjection(grayscale, width, height),
-    3,
-  );
-  const horizontalProjection = smoothProjection(
-    createHorizontalEdgeProjection(grayscale, width, height),
-    3,
-  );
+  const channels = createChannels(pixels, width, height);
+  const expectedBounds =
+    options.expectedOuterBounds ?? defaultManualOuterBounds(capture);
+  const expectedCorners = cornersFromBounds(expectedBounds);
+  const variants = createEdgeVariants(channels, width, height);
+  const searchModes = options.expectedOuterBounds ? [true, false] : [false];
+  const candidates = variants
+    .flatMap((edges) =>
+      searchModes.map((guideProvided) =>
+        detectOuterCandidate(
+          edges,
+          width,
+          height,
+          expectedBounds,
+          expectedCorners,
+          guideProvided,
+        ),
+      ),
+    )
+    .filter((candidate): candidate is OuterCandidate => candidate !== null)
+    .sort((first, second) => second.score - first.score);
+  const outer = candidates[0];
 
-  const outerLeft = findPeak(verticalProjection, 0.01, 0.44);
-  const outerRight = findPeak(verticalProjection, 0.56, 0.99);
-  const outerTop = findPeak(horizontalProjection, 0.01, 0.44);
-  const outerBottom = findPeak(horizontalProjection, 0.56, 0.99);
-
-  if (
-    outerRight.index - outerLeft.index < width * 0.35 ||
-    outerBottom.index - outerTop.index < height * 0.35
-  ) {
+  if (!outer || outer.score < 0.34) {
     throw new Error(
-      'The card edges could not be separated from the background. Use a contrasting background and keep the full card visible.',
+      'The card edges could not be separated from the background. Continue with manual overlays or retake the picture with more visible background contrast.',
     );
   }
 
-  const cardWidth = outerRight.index - outerLeft.index;
-  const cardHeight = outerBottom.index - outerTop.index;
-  const innerLeft = findPeakInRange(
-    verticalProjection,
-    outerLeft.index + cardWidth * 0.025,
-    outerLeft.index + cardWidth * 0.3,
+  const rectified = rectifyChannels(channels, width, height, outer.corners);
+  const inner = detectInnerFrame(
+    createCombinedEdges(rectified, RECTIFIED_WIDTH, RECTIFIED_HEIGHT),
+    RECTIFIED_WIDTH,
+    RECTIFIED_HEIGHT,
   );
-  const innerRight = findPeakInRange(
-    verticalProjection,
-    outerLeft.index + cardWidth * 0.7,
-    outerRight.index - cardWidth * 0.025,
-  );
-  const innerTop = findPeakInRange(
-    horizontalProjection,
-    outerTop.index + cardHeight * 0.025,
-    outerTop.index + cardHeight * 0.3,
-  );
-  const innerBottom = findPeakInRange(
-    horizontalProjection,
-    outerTop.index + cardHeight * 0.7,
-    outerBottom.index - cardHeight * 0.025,
-  );
-
-  const leftMargin = innerLeft.index - outerLeft.index;
-  const rightMargin = outerRight.index - innerRight.index;
-  const topMargin = innerTop.index - outerTop.index;
-  const bottomMargin = outerBottom.index - innerBottom.index;
-  const horizontal = percentages(leftMargin, rightMargin);
-  const vertical = percentages(topMargin, bottomMargin);
-  const confidence = average([
-    outerLeft.confidence,
-    outerRight.confidence,
-    outerTop.confidence,
-    outerBottom.confidence,
-    innerLeft.confidence,
-    innerRight.confidence,
-    innerTop.confidence,
-    innerBottom.confidence,
-  ]);
+  const innerCorners = mapRectifiedFrameToSource(outer.corners, inner);
+  const horizontal = percentages(inner.left, 1 - inner.right);
+  const vertical = percentages(inner.top, 1 - inner.bottom);
   const warnings: string[] = [];
 
-  if (confidence < 0.5) {
+  if (outer.score < 0.55) {
     warnings.push(
-      'Edge confidence is low. Glare, artwork, or a borderless design may be affecting the estimate.',
+      'Outer-edge confidence is limited. Confirm that every cyan corner follows the physical card edge.',
+    );
+  }
+  if (inner.frameType === 'borderless-or-full-art') {
+    warnings.push(
+      'No consistent inner border was found. This may be a borderless or full-art card; the yellow guide is only a starting position and should be set manually.',
+    );
+  } else if (inner.frameType === 'uncertain') {
+    warnings.push(
+      'The inner frame is inconsistent across scan lines. Verify all four yellow corners before using the percentages.',
     );
   }
 
-  if (
-    Math.min(leftMargin, rightMargin) < cardWidth * 0.015 ||
-    Math.min(topMargin, bottomMargin) < cardHeight * 0.015
-  ) {
-    warnings.push(
-      'The detected inner frame is very close to a card edge. Verify the yellow guide before using the percentages.',
-    );
-  }
-
+  const confidence = clamp(
+    outer.score * 0.65 + inner.support * 0.35,
+    0,
+    1,
+  );
   return {
     captureId: capture.id,
     viewId: capture.viewId,
     method: 'automatic',
-    outerBounds: normalizeBounds(
-      outerLeft.index,
-      outerTop.index,
-      outerRight.index,
-      outerBottom.index,
-      width,
-      height,
-    ),
-    innerBounds: normalizeBounds(
-      innerLeft.index,
-      innerTop.index,
-      innerRight.index,
-      innerBottom.index,
-      width,
-      height,
-    ),
+    frameType: inner.frameType,
+    outerBounds: boundsFromCorners(outer.corners),
+    innerBounds: boundsFromCorners(innerCorners),
+    outerCorners: outer.corners,
+    innerCorners,
     horizontal: {
       leftPercent: horizontal.first,
       rightPercent: horizontal.second,
@@ -185,22 +221,666 @@ export async function analyzeCentering(
     },
     confidence,
     warnings,
+    diagnostics: {
+      candidateScore: outer.score,
+      edgeSupport: outer.edgeSupport,
+      aspectScore: outer.aspectScore,
+      guideScore: outer.guideScore,
+      innerFrameSupport: inner.support,
+    },
+  };
+}
+
+function createChannels(
+  pixels: Uint8ClampedArray,
+  width: number,
+  height: number,
+): PixelChannels {
+  const length = width * height;
+  const luminance = new Float32Array(length);
+  const red = new Uint8Array(length);
+  const green = new Uint8Array(length);
+  const blue = new Uint8Array(length);
+  for (let index = 0; index < length; index += 1) {
+    const offset = index * 4;
+    red[index] = pixels[offset];
+    green[index] = pixels[offset + 1];
+    blue[index] = pixels[offset + 2];
+    luminance[index] =
+      pixels[offset] * 0.299 +
+      pixels[offset + 1] * 0.587 +
+      pixels[offset + 2] * 0.114;
+  }
+  return { luminance, red, green, blue };
+}
+
+function createEdgeVariants(
+  channels: PixelChannels,
+  width: number,
+  height: number,
+): EdgeMaps[] {
+  const luminance = createGradientEdges(
+    channels.luminance,
+    width,
+    height,
+    false,
+  );
+  const normalized = createGradientEdges(
+    normalizeChannel(channels.luminance),
+    width,
+    height,
+    true,
+  );
+  const color = createColorEdges(channels, width, height);
+  return [
+    luminance,
+    normalized,
+    combineEdges(luminance, color, 0.58, 0.42),
+  ];
+}
+
+function createGradientEdges(
+  channel: Float32Array,
+  width: number,
+  height: number,
+  adaptive: boolean,
+): EdgeMaps {
+  const x = new Float32Array(width * height);
+  const y = new Float32Array(width * height);
+  for (let row = 1; row < height - 1; row += 1) {
+    for (let column = 1; column < width - 1; column += 1) {
+      const index = row * width + column;
+      const localScale = adaptive ? 80 / Math.max(24, channel[index]) : 1;
+      x[index] =
+        Math.abs(channel[index + 1] - channel[index - 1]) * localScale;
+      y[index] =
+        Math.abs(channel[index + width] - channel[index - width]) * localScale;
+    }
+  }
+  return { x, y };
+}
+
+function createColorEdges(
+  channels: PixelChannels,
+  width: number,
+  height: number,
+): EdgeMaps {
+  const x = new Float32Array(width * height);
+  const y = new Float32Array(width * height);
+  for (let row = 1; row < height - 1; row += 1) {
+    for (let column = 1; column < width - 1; column += 1) {
+      const index = row * width + column;
+      x[index] =
+        colorDistance(channels, index - 1, index + 1) / 3;
+      y[index] =
+        colorDistance(channels, index - width, index + width) / 3;
+    }
+  }
+  return { x, y };
+}
+
+function createCombinedEdges(
+  channels: PixelChannels,
+  width: number,
+  height: number,
+): EdgeMaps {
+  return combineEdges(
+    createGradientEdges(channels.luminance, width, height, false),
+    createColorEdges(channels, width, height),
+    0.62,
+    0.38,
+  );
+}
+
+function combineEdges(
+  first: EdgeMaps,
+  second: EdgeMaps,
+  firstWeight: number,
+  secondWeight: number,
+): EdgeMaps {
+  const x = new Float32Array(first.x.length);
+  const y = new Float32Array(first.y.length);
+  for (let index = 0; index < x.length; index += 1) {
+    x[index] = first.x[index] * firstWeight + second.x[index] * secondWeight;
+    y[index] = first.y[index] * firstWeight + second.y[index] * secondWeight;
+  }
+  return { x, y };
+}
+
+function normalizeChannel(channel: Float32Array): Float32Array {
+  let sum = 0;
+  let squared = 0;
+  for (const value of channel) {
+    sum += value;
+    squared += value * value;
+  }
+  const mean = sum / Math.max(1, channel.length);
+  const deviation = Math.sqrt(
+    Math.max(1, squared / Math.max(1, channel.length) - mean * mean),
+  );
+  const normalized = new Float32Array(channel.length);
+  for (let index = 0; index < channel.length; index += 1) {
+    normalized[index] = clamp(
+      128 + ((channel[index] - mean) / deviation) * 48,
+      0,
+      255,
+    );
+  }
+  return normalized;
+}
+
+function detectOuterCandidate(
+  edges: EdgeMaps,
+  width: number,
+  height: number,
+  expected: CenteringBounds,
+  expectedCorners: CenteringCorners,
+  guideProvided: boolean,
+): OuterCandidate | null {
+  const searchExpansion = guideProvided ? 0.14 : 0.3;
+  const left = fitVerticalSide(
+    edges.x,
+    width,
+    height,
+    expected.left,
+    searchExpansion,
+    expected.top,
+    expected.bottom,
+  );
+  const right = fitVerticalSide(
+    edges.x,
+    width,
+    height,
+    expected.right,
+    searchExpansion,
+    expected.top,
+    expected.bottom,
+  );
+  const top = fitHorizontalSide(
+    edges.y,
+    width,
+    height,
+    expected.top,
+    searchExpansion,
+    expected.left,
+    expected.right,
+  );
+  const bottom = fitHorizontalSide(
+    edges.y,
+    width,
+    height,
+    expected.bottom,
+    searchExpansion,
+    expected.left,
+    expected.right,
+  );
+  if (!left || !right || !top || !bottom) return null;
+
+  const corners = {
+    topLeft: intersectLines(left, top, width, height),
+    topRight: intersectLines(right, top, width, height),
+    bottomRight: intersectLines(right, bottom, width, height),
+    bottomLeft: intersectLines(left, bottom, width, height),
+  };
+  if (!isValidCardQuad(corners)) return null;
+
+  const topWidth = pointDistancePixels(
+    corners.topLeft,
+    corners.topRight,
+    width,
+    height,
+  );
+  const bottomWidth = pointDistancePixels(
+    corners.bottomLeft,
+    corners.bottomRight,
+    width,
+    height,
+  );
+  const leftHeight = pointDistancePixels(
+    corners.topLeft,
+    corners.bottomLeft,
+    width,
+    height,
+  );
+  const rightHeight = pointDistancePixels(
+    corners.topRight,
+    corners.bottomRight,
+    width,
+    height,
+  );
+  const cardWidth = (topWidth + bottomWidth) / 2;
+  const cardHeight = (leftHeight + rightHeight) / 2;
+  const aspect = cardWidth / Math.max(0.001, cardHeight);
+  const aspectScore = Math.exp(-Math.abs(Math.log(aspect / CARD_ASPECT)) * 3.2);
+  const guideDistance =
+    cornerDistance(corners, expectedCorners) / Math.SQRT2;
+  const guideScore = Math.exp(-guideDistance * (guideProvided ? 8 : 3.5));
+  const edgeSupport = average([
+    left.support,
+    right.support,
+    top.support,
+    bottom.support,
+  ]);
+  const parallelScore =
+    Math.exp(-Math.abs(left.slope - right.slope) * 5) *
+    Math.exp(-Math.abs(top.slope - bottom.slope) * 5);
+  const area = polygonArea(corners);
+  const areaScore = clamp((area - 0.08) / 0.32, 0, 1);
+  const score =
+    edgeSupport * 0.42 +
+    aspectScore * 0.24 +
+    guideScore * 0.2 +
+    parallelScore * 0.08 +
+    areaScore * 0.06;
+  return { corners, score, edgeSupport, aspectScore, guideScore };
+}
+
+function fitVerticalSide(
+  edges: Float32Array,
+  width: number,
+  height: number,
+  expectedX: number,
+  searchFraction: number,
+  startY: number,
+  endY: number,
+): FittedLine | null {
+  const points: EdgePoint[] = [];
+  const minimumX = clamp(
+    Math.round((expectedX - searchFraction) * width),
+    1,
+    width - 2,
+  );
+  const maximumX = clamp(
+    Math.round((expectedX + searchFraction) * width),
+    1,
+    width - 2,
+  );
+  for (let sample = 0; sample < SCAN_COUNT; sample += 1) {
+    const fraction = (sample + 0.5) / SCAN_COUNT;
+    const y = Math.round(
+      (startY + (endY - startY) * fraction) * (height - 1),
+    );
+    const peak = strongestEdge(edges, y * width, minimumX, maximumX, 1);
+    if (peak) points.push({ x: peak.index, y, weight: peak.confidence });
+  }
+  return robustFit(points, 'vertical', width, height);
+}
+
+function fitHorizontalSide(
+  edges: Float32Array,
+  width: number,
+  height: number,
+  expectedY: number,
+  searchFraction: number,
+  startX: number,
+  endX: number,
+): FittedLine | null {
+  const points: EdgePoint[] = [];
+  const minimumY = clamp(
+    Math.round((expectedY - searchFraction) * height),
+    1,
+    height - 2,
+  );
+  const maximumY = clamp(
+    Math.round((expectedY + searchFraction) * height),
+    1,
+    height - 2,
+  );
+  for (let sample = 0; sample < SCAN_COUNT; sample += 1) {
+    const fraction = (sample + 0.5) / SCAN_COUNT;
+    const x = Math.round(
+      (startX + (endX - startX) * fraction) * (width - 1),
+    );
+    const peak = strongestEdge(edges, x, minimumY, maximumY, width);
+    if (peak) points.push({ x, y: peak.index, weight: peak.confidence });
+  }
+  return robustFit(points, 'horizontal', width, height);
+}
+
+function strongestEdge(
+  edges: Float32Array,
+  offset: number,
+  start: number,
+  end: number,
+  stride: number,
+): { index: number; confidence: number } | null {
+  let peakValue = -Infinity;
+  let peakIndex = start;
+  let sum = 0;
+  let count = 0;
+  for (let position = start; position <= end; position += 1) {
+    const value = edges[offset + position * stride];
+    sum += value;
+    count += 1;
+    if (value > peakValue) {
+      peakValue = value;
+      peakIndex = position;
+    }
+  }
+  const mean = sum / Math.max(1, count);
+  if (!Number.isFinite(peakValue) || peakValue < mean * 1.18 + 2) return null;
+  return {
+    index: peakIndex,
+    confidence: clamp((peakValue - mean) / Math.max(1, peakValue), 0, 1),
+  };
+}
+
+function robustFit(
+  points: EdgePoint[],
+  orientation: 'vertical' | 'horizontal',
+  width: number,
+  height: number,
+): FittedLine | null {
+  if (points.length < SCAN_COUNT * 0.35) return null;
+  let selected = points;
+  let line = weightedRegression(selected, orientation, width, height);
+  for (let iteration = 0; iteration < 2; iteration += 1) {
+    const residuals = selected.map((point) =>
+      lineResidual(line, point, orientation, width, height),
+    );
+    const threshold = Math.max(0.004, median(residuals) * 2.5);
+    selected = selected.filter(
+      (point) =>
+        lineResidual(line, point, orientation, width, height) <= threshold,
+    );
+    if (selected.length < SCAN_COUNT * 0.3) return null;
+    line = weightedRegression(selected, orientation, width, height);
+  }
+  const pointSupport = selected.length / SCAN_COUNT;
+  const strength = average(selected.map((point) => point.weight));
+  return { ...line, support: clamp(pointSupport * 0.65 + strength * 0.35, 0, 1) };
+}
+
+function weightedRegression(
+  points: EdgePoint[],
+  orientation: 'vertical' | 'horizontal',
+  width: number,
+  height: number,
+): FittedLine {
+  let sumWeight = 0;
+  let sumInput = 0;
+  let sumOutput = 0;
+  for (const point of points) {
+    const input = orientation === 'vertical' ? point.y / height : point.x / width;
+    const output = orientation === 'vertical' ? point.x / width : point.y / height;
+    const weight = Math.max(0.05, point.weight);
+    sumWeight += weight;
+    sumInput += input * weight;
+    sumOutput += output * weight;
+  }
+  const meanInput = sumInput / sumWeight;
+  const meanOutput = sumOutput / sumWeight;
+  let covariance = 0;
+  let variance = 0;
+  for (const point of points) {
+    const input = orientation === 'vertical' ? point.y / height : point.x / width;
+    const output = orientation === 'vertical' ? point.x / width : point.y / height;
+    const weight = Math.max(0.05, point.weight);
+    covariance += weight * (input - meanInput) * (output - meanOutput);
+    variance += weight * (input - meanInput) ** 2;
+  }
+  const slope = variance <= 1e-8 ? 0 : covariance / variance;
+  return { slope, intercept: meanOutput - slope * meanInput, support: 0 };
+}
+
+function lineResidual(
+  line: FittedLine,
+  point: EdgePoint,
+  orientation: 'vertical' | 'horizontal',
+  width: number,
+  height: number,
+): number {
+  const input = orientation === 'vertical' ? point.y / height : point.x / width;
+  const output = orientation === 'vertical' ? point.x / width : point.y / height;
+  return Math.abs(output - (line.slope * input + line.intercept));
+}
+
+function intersectLines(
+  vertical: FittedLine,
+  horizontal: FittedLine,
+  _width: number,
+  _height: number,
+): CenteringPoint {
+  const denominator = 1 - vertical.slope * horizontal.slope;
+  const x =
+    Math.abs(denominator) < 1e-6
+      ? vertical.intercept
+      : (vertical.slope * horizontal.intercept + vertical.intercept) /
+        denominator;
+  const y = horizontal.slope * x + horizontal.intercept;
+  return { x, y };
+}
+
+function isValidCardQuad(corners: CenteringCorners): boolean {
+  const points = [
+    corners.topLeft,
+    corners.topRight,
+    corners.bottomRight,
+    corners.bottomLeft,
+  ];
+  if (
+    points.some(
+      (point) =>
+        point.x < 0 || point.x > 1 || point.y < 0 || point.y > 1,
+    )
+  ) {
+    return false;
+  }
+  if (polygonArea(corners) < 0.06) return false;
+  let sign = 0;
+  for (let index = 0; index < points.length; index += 1) {
+    const first = points[index];
+    const second = points[(index + 1) % points.length];
+    const third = points[(index + 2) % points.length];
+    const value =
+      (second.x - first.x) * (third.y - second.y) -
+      (second.y - first.y) * (third.x - second.x);
+    if (Math.abs(value) < 1e-5) return false;
+    const nextSign = Math.sign(value);
+    if (sign && nextSign !== sign) return false;
+    sign = nextSign;
+  }
+  return true;
+}
+
+function rectifyChannels(
+  source: PixelChannels,
+  sourceWidth: number,
+  sourceHeight: number,
+  corners: CenteringCorners,
+): PixelChannels {
+  const length = RECTIFIED_WIDTH * RECTIFIED_HEIGHT;
+  const result: PixelChannels = {
+    luminance: new Float32Array(length),
+    red: new Uint8Array(length),
+    green: new Uint8Array(length),
+    blue: new Uint8Array(length),
+  };
+  for (let y = 0; y < RECTIFIED_HEIGHT; y += 1) {
+    const v = y / (RECTIFIED_HEIGHT - 1);
+    for (let x = 0; x < RECTIFIED_WIDTH; x += 1) {
+      const u = x / (RECTIFIED_WIDTH - 1);
+      const point = projectivePoint(corners, u, v);
+      const sourceX = clamp(Math.round(point.x * (sourceWidth - 1)), 0, sourceWidth - 1);
+      const sourceY = clamp(Math.round(point.y * (sourceHeight - 1)), 0, sourceHeight - 1);
+      const sourceIndex = sourceY * sourceWidth + sourceX;
+      const targetIndex = y * RECTIFIED_WIDTH + x;
+      result.luminance[targetIndex] = source.luminance[sourceIndex];
+      result.red[targetIndex] = source.red[sourceIndex];
+      result.green[targetIndex] = source.green[sourceIndex];
+      result.blue[targetIndex] = source.blue[sourceIndex];
+    }
+  }
+  return result;
+}
+
+function detectInnerFrame(
+  edges: EdgeMaps,
+  width: number,
+  height: number,
+): InnerFrameDetection {
+  const leftSamples: number[] = [];
+  const rightSamples: number[] = [];
+  const topSamples: number[] = [];
+  const bottomSamples: number[] = [];
+  const confidences: number[] = [];
+
+  for (let sample = 0; sample < 18; sample += 1) {
+    const y = Math.round((0.1 + (sample / 17) * 0.8) * (height - 1));
+    collectInnerPeak(edges.x, y * width, width, 0.025, 0.32, 1, leftSamples, confidences);
+    collectInnerPeak(edges.x, y * width, width, 0.68, 0.975, 1, rightSamples, confidences);
+    const x = Math.round((0.1 + (sample / 17) * 0.8) * (width - 1));
+    collectInnerPeak(edges.y, x, height, 0.025, 0.32, width, topSamples, confidences);
+    collectInnerPeak(edges.y, x, height, 0.68, 0.975, width, bottomSamples, confidences);
+  }
+
+  const sampleSupport =
+    Math.min(
+      leftSamples.length,
+      rightSamples.length,
+      topSamples.length,
+      bottomSamples.length,
+    ) / 18;
+  const consistency = average([
+    sampleConsistency(leftSamples),
+    sampleConsistency(rightSamples),
+    sampleConsistency(topSamples),
+    sampleConsistency(bottomSamples),
+  ]);
+  const strength = confidences.length ? average(confidences) : 0;
+  const support = clamp(sampleSupport * 0.45 + consistency * 0.3 + strength * 0.25, 0, 1);
+  const hasEnoughSamples = [
+    leftSamples,
+    rightSamples,
+    topSamples,
+    bottomSamples,
+  ].every((samples) => samples.length >= 4);
+  const frameType =
+    !hasEnoughSamples
+      ? 'borderless-or-full-art'
+      : support >= 0.46
+      ? 'bordered'
+      : support >= 0.25
+        ? 'uncertain'
+        : 'borderless-or-full-art';
+  if (frameType === 'borderless-or-full-art') {
+    return { left: 0.06, top: 0.06, right: 0.94, bottom: 0.94, support, frameType };
+  }
+  return {
+    left: clamp(median(leftSamples) / width, 0.02, 0.4),
+    top: clamp(median(topSamples) / height, 0.02, 0.4),
+    right: clamp(median(rightSamples) / width, 0.6, 0.98),
+    bottom: clamp(median(bottomSamples) / height, 0.6, 0.98),
+    support,
+    frameType,
+  };
+}
+
+function collectInnerPeak(
+  edges: Float32Array,
+  offset: number,
+  length: number,
+  startFraction: number,
+  endFraction: number,
+  stride: number,
+  samples: number[],
+  confidences: number[],
+) {
+  const peak = strongestEdge(
+    edges,
+    offset,
+    Math.round(startFraction * length),
+    Math.round(endFraction * length),
+    stride,
+  );
+  if (peak) {
+    samples.push(peak.index);
+    confidences.push(peak.confidence);
+  }
+}
+
+function mapRectifiedFrameToSource(
+  outer: CenteringCorners,
+  inner: InnerFrameDetection,
+): CenteringCorners {
+  return {
+    topLeft: projectivePoint(outer, inner.left, inner.top),
+    topRight: projectivePoint(outer, inner.right, inner.top),
+    bottomRight: projectivePoint(outer, inner.right, inner.bottom),
+    bottomLeft: projectivePoint(outer, inner.left, inner.bottom),
+  };
+}
+
+function projectivePoint(
+  corners: CenteringCorners,
+  u: number,
+  v: number,
+): CenteringPoint {
+  const topLeft = corners.topLeft;
+  const topRight = corners.topRight;
+  const bottomRight = corners.bottomRight;
+  const bottomLeft = corners.bottomLeft;
+  const deltaX1 = topRight.x - bottomRight.x;
+  const deltaX2 = bottomLeft.x - bottomRight.x;
+  const deltaX3 =
+    topLeft.x - topRight.x + bottomRight.x - bottomLeft.x;
+  const deltaY1 = topRight.y - bottomRight.y;
+  const deltaY2 = bottomLeft.y - bottomRight.y;
+  const deltaY3 =
+    topLeft.y - topRight.y + bottomRight.y - bottomLeft.y;
+  const projectiveDenominator =
+    deltaX1 * deltaY2 - deltaX2 * deltaY1;
+  let projectiveX = 0;
+  let projectiveY = 0;
+  if (
+    Math.abs(deltaX3) > 1e-8 ||
+    Math.abs(deltaY3) > 1e-8
+  ) {
+    if (Math.abs(projectiveDenominator) < 1e-8) {
+      return {
+        x:
+          topLeft.x +
+          (topRight.x - topLeft.x) * u +
+          (bottomLeft.x - topLeft.x) * v,
+        y:
+          topLeft.y +
+          (topRight.y - topLeft.y) * u +
+          (bottomLeft.y - topLeft.y) * v,
+      };
+    }
+    projectiveX =
+      (deltaX3 * deltaY2 - deltaX2 * deltaY3) /
+      projectiveDenominator;
+    projectiveY =
+      (deltaX1 * deltaY3 - deltaX3 * deltaY1) /
+      projectiveDenominator;
+  }
+  const a =
+    topRight.x - topLeft.x + projectiveX * topRight.x;
+  const b =
+    bottomLeft.x - topLeft.x + projectiveY * bottomLeft.x;
+  const d =
+    topRight.y - topLeft.y + projectiveX * topRight.y;
+  const e =
+    bottomLeft.y - topLeft.y + projectiveY * bottomLeft.y;
+  const denominator = projectiveX * u + projectiveY * v + 1;
+  return {
+    x: (a * u + b * v + topLeft.x) / denominator,
+    y: (d * u + e * v + topLeft.y) / denominator,
   };
 }
 
 function defaultManualOuterBounds(capture: Capture): CenteringBounds {
-  const cardAspect = 2.5 / 3.5;
   const imageAspect = capture.width / Math.max(1, capture.height);
   const maximumSize = 0.82;
   const width =
-    imageAspect > cardAspect
-      ? (maximumSize * cardAspect) / imageAspect
+    imageAspect > CARD_ASPECT
+      ? (maximumSize * CARD_ASPECT) / imageAspect
       : maximumSize;
   const height =
-    imageAspect > cardAspect
+    imageAspect > CARD_ASPECT
       ? maximumSize
-      : (maximumSize * imageAspect) / cardAspect;
-
+      : (maximumSize * imageAspect) / CARD_ASPECT;
   return {
     left: (1 - width) / 2,
     top: (1 - height) / 2,
@@ -223,127 +903,23 @@ function insetBounds(
   };
 }
 
-interface Peak {
-  index: number;
-  confidence: number;
+function cornersFromBounds(bounds: CenteringBounds): CenteringCorners {
+  return {
+    topLeft: { x: bounds.left, y: bounds.top },
+    topRight: { x: bounds.right, y: bounds.top },
+    bottomRight: { x: bounds.right, y: bounds.bottom },
+    bottomLeft: { x: bounds.left, y: bounds.bottom },
+  };
 }
 
-function toGrayscale(
-  pixels: Uint8ClampedArray,
-  width: number,
-  height: number,
-): Float32Array {
-  const grayscale = new Float32Array(width * height);
-  for (let pixel = 0; pixel < grayscale.length; pixel += 1) {
-    const offset = pixel * 4;
-    grayscale[pixel] =
-      pixels[offset] * 0.299 +
-      pixels[offset + 1] * 0.587 +
-      pixels[offset + 2] * 0.114;
-  }
-  return grayscale;
-}
-
-function createVerticalEdgeProjection(
-  grayscale: Float32Array,
-  width: number,
-  height: number,
-): Float32Array {
-  const projection = new Float32Array(width);
-  const startY = Math.floor(height * 0.04);
-  const endY = Math.ceil(height * 0.96);
-
-  for (let x = 1; x < width - 1; x += 1) {
-    let sum = 0;
-    for (let y = startY; y < endY; y += 1) {
-      const offset = y * width + x;
-      sum += Math.abs(grayscale[offset + 1] - grayscale[offset - 1]);
-    }
-    projection[x] = sum / Math.max(1, endY - startY);
-  }
-  return projection;
-}
-
-function createHorizontalEdgeProjection(
-  grayscale: Float32Array,
-  width: number,
-  height: number,
-): Float32Array {
-  const projection = new Float32Array(height);
-  const startX = Math.floor(width * 0.04);
-  const endX = Math.ceil(width * 0.96);
-
-  for (let y = 1; y < height - 1; y += 1) {
-    let sum = 0;
-    for (let x = startX; x < endX; x += 1) {
-      const offset = y * width + x;
-      sum += Math.abs(
-        grayscale[offset + width] - grayscale[offset - width],
-      );
-    }
-    projection[y] = sum / Math.max(1, endX - startX);
-  }
-  return projection;
-}
-
-function smoothProjection(
-  projection: Float32Array,
-  radius: number,
-): Float32Array {
-  const smoothed = new Float32Array(projection.length);
-  for (let index = 0; index < projection.length; index += 1) {
-    let sum = 0;
-    let count = 0;
-    for (
-      let sample = Math.max(0, index - radius);
-      sample <= Math.min(projection.length - 1, index + radius);
-      sample += 1
-    ) {
-      sum += projection[sample];
-      count += 1;
-    }
-    smoothed[index] = sum / count;
-  }
-  return smoothed;
-}
-
-function findPeak(
-  projection: Float32Array,
-  startFraction: number,
-  endFraction: number,
-): Peak {
-  return findPeakInRange(
-    projection,
-    projection.length * startFraction,
-    projection.length * endFraction,
-  );
-}
-
-function findPeakInRange(
-  projection: Float32Array,
-  startValue: number,
-  endValue: number,
-): Peak {
-  const start = Math.max(0, Math.floor(startValue));
-  const end = Math.min(projection.length - 1, Math.ceil(endValue));
-  let peakIndex = start;
-  let peakValue = -Infinity;
-  let sum = 0;
-
-  for (let index = start; index <= end; index += 1) {
-    const value = projection[index];
-    sum += value;
-    if (value > peakValue) {
-      peakValue = value;
-      peakIndex = index;
-    }
-  }
-
-  const mean = sum / Math.max(1, end - start + 1);
-  const confidence =
-    peakValue <= 0 ? 0 : clamp((peakValue - mean) / peakValue, 0, 1);
-
-  return { index: peakIndex, confidence };
+function boundsFromCorners(corners: CenteringCorners): CenteringBounds {
+  const points = Object.values(corners);
+  return {
+    left: Math.min(...points.map((point) => point.x)),
+    top: Math.min(...points.map((point) => point.y)),
+    right: Math.max(...points.map((point) => point.x)),
+    bottom: Math.max(...points.map((point) => point.y)),
+  };
 }
 
 function percentages(
@@ -351,10 +927,7 @@ function percentages(
   second: number,
 ): { first: number; second: number } {
   const total = first + second;
-  if (total <= 0) {
-    return { first: 50, second: 50 };
-  }
-
+  if (total <= 0) return { first: 50, second: 50 };
   const firstPercent = (first / total) * 100;
   return {
     first: roundOne(firstPercent),
@@ -362,25 +935,82 @@ function percentages(
   };
 }
 
-function normalizeBounds(
-  left: number,
-  top: number,
-  right: number,
-  bottom: number,
+function colorDistance(
+  channels: PixelChannels,
+  first: number,
+  second: number,
+): number {
+  return (
+    Math.abs(channels.red[first] - channels.red[second]) +
+    Math.abs(channels.green[first] - channels.green[second]) +
+    Math.abs(channels.blue[first] - channels.blue[second])
+  );
+}
+
+function cornerDistance(
+  first: CenteringCorners,
+  second: CenteringCorners,
+): number {
+  return average([
+    pointDistance(first.topLeft, second.topLeft),
+    pointDistance(first.topRight, second.topRight),
+    pointDistance(first.bottomRight, second.bottomRight),
+    pointDistance(first.bottomLeft, second.bottomLeft),
+  ]);
+}
+
+function pointDistance(first: CenteringPoint, second: CenteringPoint): number {
+  return Math.hypot(second.x - first.x, second.y - first.y);
+}
+
+function pointDistancePixels(
+  first: CenteringPoint,
+  second: CenteringPoint,
   width: number,
   height: number,
-): CenteringBounds {
-  return {
-    left: left / width,
-    top: top / height,
-    right: right / width,
-    bottom: bottom / height,
-  };
+): number {
+  return Math.hypot(
+    (second.x - first.x) * width,
+    (second.y - first.y) * height,
+  );
+}
+
+function polygonArea(corners: CenteringCorners): number {
+  const points = [
+    corners.topLeft,
+    corners.topRight,
+    corners.bottomRight,
+    corners.bottomLeft,
+  ];
+  let area = 0;
+  for (let index = 0; index < points.length; index += 1) {
+    const first = points[index];
+    const second = points[(index + 1) % points.length];
+    area += first.x * second.y - second.x * first.y;
+  }
+  return Math.abs(area) / 2;
+}
+
+function sampleConsistency(samples: number[]): number {
+  if (samples.length < 4) return 0;
+  const center = median(samples);
+  const deviation = median(samples.map((value) => Math.abs(value - center)));
+  return Math.exp(-deviation / Math.max(2, center * 0.08));
+}
+
+function median(values: number[]): number {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((first, second) => first - second);
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2
+    ? sorted[middle]
+    : (sorted[middle - 1] + sorted[middle]) / 2;
 }
 
 function loadImage(uri: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const image = new Image();
+    image.decoding = 'async';
     image.onload = () => resolve(image);
     image.onerror = () =>
       reject(new Error('The selected picture could not be decoded.'));
@@ -389,7 +1019,9 @@ function loadImage(uri: string): Promise<HTMLImageElement> {
 }
 
 function average(values: number[]): number {
-  return values.reduce((sum, value) => sum + value, 0) / values.length;
+  return values.length
+    ? values.reduce((sum, value) => sum + value, 0) / values.length
+    : 0;
 }
 
 function roundOne(value: number): number {

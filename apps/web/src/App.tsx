@@ -21,6 +21,11 @@ import {
   createManualCenteringMeasurement,
 } from './centering';
 import { CenteringResults } from './CenteringResults';
+import {
+  analyzeVideoFrame,
+  CameraGuidance,
+  captureBestFrame,
+} from './captureAssist';
 
 const MAX_IMAGE_BYTES = 25 * 1024 * 1024;
 
@@ -54,6 +59,9 @@ export function App() {
   const [reviewOpen, setReviewOpen] = useState(false);
   const [centeringOpen, setCenteringOpen] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
+  const [isCapturingFrame, setIsCapturingFrame] = useState(false);
+  const [cameraGuidance, setCameraGuidance] =
+    useState<CameraGuidance | null>(null);
   const [isAnalyzingCentering, setIsAnalyzingCentering] = useState(false);
   const [centeringMeasurements, setCenteringMeasurements] = useState<
     CenteringMeasurement[] | null
@@ -133,6 +141,32 @@ export function App() {
       setCamera({ status: 'idle' });
     }
   }, [camera, currentStep]);
+
+  useEffect(() => {
+    if (camera.status !== 'ready') {
+      setCameraGuidance(null);
+      return;
+    }
+    let cancelled = false;
+    let timer = 0;
+    const updateGuidance = () => {
+      const video = videoRef.current;
+      if (!cancelled && video?.videoWidth) {
+        const guideBounds = calculateCameraGuideBounds(
+          video,
+          cameraFrameRef.current,
+          cameraGuideRef.current,
+        );
+        setCameraGuidance(analyzeVideoFrame(video, guideBounds));
+      }
+      timer = window.setTimeout(updateGuidance, 700);
+    };
+    timer = window.setTimeout(updateGuidance, 250);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [camera]);
 
   useEffect(() => {
     const captureAdded = captures.length > previousCaptureCountRef.current;
@@ -216,39 +250,33 @@ export function App() {
     if (!video || !currentStep || video.videoWidth === 0) {
       return;
     }
-
-    const canvas = document.createElement('canvas');
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
-    const context = canvas.getContext('2d');
-    if (!context) {
-      setCamera({
-        status: 'unavailable',
-        message: 'This browser cannot prepare camera images.',
-      });
-      return;
-    }
-
-    context.drawImage(video, 0, 0);
-    const blob = await new Promise<Blob | null>((resolve) =>
-      canvas.toBlob(resolve, 'image/jpeg', 0.95),
-    );
-    if (!blob) {
-      return;
-    }
-
     const guideBounds = calculateCameraGuideBounds(
       video,
       cameraFrameRef.current,
       cameraGuideRef.current,
     );
-    addCapture(
-      currentStep.id,
-      blob,
-      canvas.width,
-      canvas.height,
-      guideBounds ?? undefined,
-    );
+    setIsCapturingFrame(true);
+    try {
+      const frame = await captureBestFrame(video, guideBounds);
+      addCapture(
+        currentStep.id,
+        frame.blob,
+        frame.width,
+        frame.height,
+        guideBounds ?? undefined,
+      );
+    } catch (error) {
+      setCameraGuidance({
+        status: 'warning',
+        message:
+          error instanceof Error
+            ? error.message
+            : 'The camera frame could not be captured.',
+        score: 0,
+      });
+    } finally {
+      setIsCapturingFrame(false);
+    }
   }
 
   async function chooseCurrentPhoto(event: ChangeEvent<HTMLInputElement>) {
@@ -468,7 +496,11 @@ export function App() {
       }
 
       const results = await Promise.allSettled(
-        straightCaptures.map((capture) => analyzeCentering(capture!)),
+        straightCaptures.map((capture) =>
+          analyzeCentering(capture!, {
+            expectedOuterBounds: cameraGuideBounds[capture!.id],
+          }),
+        ),
       );
       const failedIds = results.flatMap((result, index) =>
         result.status === 'rejected' ? [straightCaptures[index]!.id] : [],
@@ -721,12 +753,26 @@ export function App() {
               {camera.message}
             </p>
             ) : null}
+            {camera.status === 'ready' && cameraGuidance ? (
+              <p
+                className={`camera-guidance guidance-${cameraGuidance.status}`}
+                role="status"
+              >
+                {cameraGuidance.message}
+              </p>
+            ) : null}
 
             <div className="actions">
             {camera.status === 'ready' ? (
               <>
-                <button className="primary" onClick={captureFrame}>
-                  Capture this view
+                <button
+                  className="primary"
+                  disabled={isCapturingFrame}
+                  onClick={captureFrame}
+                >
+                  {isCapturingFrame
+                    ? 'Selecting sharpest frame…'
+                    : 'Capture this view'}
                 </button>
                 <button className="secondary" onClick={stopCamera}>
                   Stop camera

@@ -22,12 +22,19 @@ scrollable bar on smaller screens, allowing direct navigation to every
 available workflow and result section.
 
 As soon as the front and back straight-on views are present, the PWA can
-calculate centering locally; the four angled views are optional. It detects
-outer card and inner frame edges, overlays both guides, and reports left/right
-and top/bottom margin percentages with a detection confidence. The percentages
-are green at 55/45 or better, yellow through 60/40, and red beyond 60/40. This
-is a centering estimate only; no grade prediction is produced. Grade prediction
-is deferred from the current PWA milestone.
+calculate centering locally; the four angled views are optional. The detector
+uses the camera guide as a search hint, compares luminance and color-gradient
+variants, robustly fits tilted card edges across multiple scan lines, and
+perspective-normalizes the card before looking for its inner frame. It reports
+bordered, uncertain, or borderless/full-art frame status and overlays editable
+outer and inner guides. Left/right and top/bottom percentages include a
+detection confidence and are green at 55/45 or better, yellow through 60/40,
+and red beyond 60/40.
+
+While the camera is open, local frame checks warn about blur, glare,
+overexposure, underexposure, and weak card/background contrast. Capturing takes
+a short three-frame burst and retains only the highest-scoring frame. No burst
+frame or diagnostic leaves the browser.
 
 If automatic card-edge detection cannot separate the card from its background,
 the user can continue with fully manual overlays without running detection
@@ -109,6 +116,19 @@ npm run pwa:build
 ```
 
 The deployable output is `apps\web\dist`.
+
+Detector calibration data must use photographs you own or have permission to
+use. Copy `docs\centering-calibration.template.json`, replace the example with
+measured expected corners and detector output, then run:
+
+```powershell
+npm run calibrate:centering -- path\to\results.json
+```
+
+The harness reports mean and p95 normalized corner error, centering percentage
+error, automatic-detection rate, and confidence-binned errors. Keep real card
+photographs outside the repository unless their redistribution rights are
+explicitly documented.
 
 The app uses native ONNX Runtime code, so use an Expo development build rather
 than Expo Go. After adding or updating native dependencies or changing

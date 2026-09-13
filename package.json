@@ -34,6 +34,7 @@
     "pwa:build:github-pages": "npm run build:github-pages --workspace @cardgrader/web",
     "pwa:dev": "npm run dev --workspace @cardgrader/web",
     "pwa:preview": "npm run preview --workspace @cardgrader/web",
+    "calibrate:centering": "node scripts/calibrate-centering.mjs",
     "typecheck": "tsc --noEmit",
     "typecheck:all": "npm run typecheck && npm run typecheck --workspace @cardgrader/web",
     "web": "expo start --web"

@@ -1,0 +1,41 @@
+{
+  "description": "Replace this example with locally owned or rights-cleared card photographs and measured ground truth.",
+  "cases": [
+    {
+      "id": "example-front",
+      "image": "local-fixtures/example-front.jpg",
+      "width": 1000,
+      "height": 1400,
+      "expected": {
+        "outerCorners": {
+          "topLeft": { "x": 100, "y": 80 },
+          "topRight": { "x": 900, "y": 90 },
+          "bottomRight": { "x": 890, "y": 1320 },
+          "bottomLeft": { "x": 110, "y": 1310 }
+        },
+        "centering": {
+          "leftPercent": 50,
+          "rightPercent": 50,
+          "topPercent": 50,
+          "bottomPercent": 50
+        }
+      },
+      "actual": {
+        "method": "automatic",
+        "confidence": 0.8,
+        "outerCorners": {
+          "topLeft": { "x": 102, "y": 83 },
+          "topRight": { "x": 898, "y": 91 },
+          "bottomRight": { "x": 887, "y": 1317 },
+          "bottomLeft": { "x": 112, "y": 1308 }
+        },
+        "centering": {
+          "leftPercent": 49.5,
+          "rightPercent": 50.5,
+          "topPercent": 50.4,
+          "bottomPercent": 49.6
+        }
+      }
+    }
+  ]
+}

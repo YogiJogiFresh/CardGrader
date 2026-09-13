@@ -1200,6 +1200,16 @@ function EditableCenteringCard({
               : `${Math.round(measurement.confidence * 100)}%`}
           </strong>
         </div>
+        <div>
+          <span>Inner frame</span>
+          <strong>
+            {measurement.frameType === 'bordered'
+              ? 'Border detected'
+              : measurement.frameType === 'borderless-or-full-art'
+                ? 'Borderless / full art'
+                : 'Needs review'}
+          </strong>
+        </div>
       </div>
       <button
         className="secondary centering-reset"
@@ -1924,8 +1934,10 @@ function guidesFromMeasurement(
   measurement: CenteringMeasurement,
 ): EditableGuides {
   return {
-    outer: cornersFromBounds(measurement.outerBounds),
-    inner: cornersFromBounds(measurement.innerBounds),
+    outer:
+      measurement.outerCorners ?? cornersFromBounds(measurement.outerBounds),
+    inner:
+      measurement.innerCorners ?? cornersFromBounds(measurement.innerBounds),
   };
 }
 
