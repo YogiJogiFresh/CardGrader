@@ -31,6 +31,12 @@ outer and inner guides. Left/right and top/bottom percentages include a
 detection confidence and are green at 55/45 or better, yellow through 60/40,
 and red beyond 60/40.
 
+For camera captures, the framing guide is the primary outer-edge reference.
+The detector first searches close to the guide, requires independent edge and
+shape support, and reduces confidence when the fitted card disagrees with the
+guide or forms an implausibly skewed quadrilateral. A wider search is used only
+when the close guide search cannot produce a reliable candidate.
+
 While the camera is open, local frame checks warn about blur, glare,
 overexposure, underexposure, and weak card/background contrast. Capturing takes
 a short three-frame burst and retains only the highest-scoring frame. No burst

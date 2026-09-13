@@ -53,7 +53,9 @@ export interface CenteringMeasurement {
     edgeSupport: number;
     aspectScore: number;
     guideScore: number;
+    geometryScore: number;
     innerFrameSupport: number;
+    guideReferenced: boolean;
   };
 }
 
@@ -87,6 +89,9 @@ interface OuterCandidate {
   edgeSupport: number;
   aspectScore: number;
   guideScore: number;
+  geometryScore: number;
+  guideDistance: number;
+  guidedSearch: boolean;
 }
 
 interface InnerFrameDetection {
@@ -147,25 +152,54 @@ export async function analyzeCentering(
     options.expectedOuterBounds ?? defaultManualOuterBounds(capture);
   const expectedCorners = cornersFromBounds(expectedBounds);
   const variants = createEdgeVariants(channels, width, height);
-  const searchModes = options.expectedOuterBounds ? [true, false] : [false];
-  const candidates = variants
-    .flatMap((edges) =>
-      searchModes.map((guideProvided) =>
-        detectOuterCandidate(
-          edges,
-          width,
-          height,
-          expectedBounds,
-          expectedCorners,
-          guideProvided,
-        ),
+  const hasCaptureGuide = Boolean(options.expectedOuterBounds);
+  const guidedCandidates = hasCaptureGuide
+    ? variants
+        .map((edges) =>
+          detectOuterCandidate(
+            edges,
+            width,
+            height,
+            expectedBounds,
+            expectedCorners,
+            true,
+            true,
+          ),
+        )
+        .filter((candidate): candidate is OuterCandidate => candidate !== null)
+        .filter(
+          (candidate) =>
+            candidate.guideDistance <= 0.1 &&
+            candidate.edgeSupport >= 0.38 &&
+            candidate.aspectScore >= 0.5 &&
+            candidate.geometryScore >= 0.42,
+        )
+    : [];
+  const broadCandidates = variants
+    .map((edges) =>
+      detectOuterCandidate(
+        edges,
+        width,
+        height,
+        expectedBounds,
+        expectedCorners,
+        false,
+        hasCaptureGuide,
       ),
     )
     .filter((candidate): candidate is OuterCandidate => candidate !== null)
-    .sort((first, second) => second.score - first.score);
+    .filter(
+      (candidate) =>
+        candidate.edgeSupport >= 0.4 &&
+        candidate.aspectScore >= 0.45 &&
+        candidate.geometryScore >= 0.42,
+    );
+  const candidates = (
+    guidedCandidates.length > 0 ? guidedCandidates : broadCandidates
+  ).sort((first, second) => second.score - first.score);
   const outer = candidates[0];
 
-  if (!outer || outer.score < 0.34) {
+  if (!outer || outer.score < (hasCaptureGuide ? 0.42 : 0.36)) {
     throw new Error(
       'The card edges could not be separated from the background. Continue with manual overlays or retake the picture with more visible background contrast.',
     );
@@ -182,9 +216,24 @@ export async function analyzeCentering(
   const vertical = percentages(inner.top, 1 - inner.bottom);
   const warnings: string[] = [];
 
-  if (outer.score < 0.55) {
+  if (outer.score < 0.58) {
     warnings.push(
       'Outer-edge confidence is limited. Confirm that every cyan corner follows the physical card edge.',
+    );
+  }
+  if (hasCaptureGuide && !outer.guidedSearch) {
+    warnings.push(
+      'A reliable edge was not found close to the camera guide. A wider search was used, so verify the cyan overlay carefully.',
+    );
+  }
+  if (hasCaptureGuide && outer.guideScore < 0.62) {
+    warnings.push(
+      'The detected card edge differs from the camera framing guide. Automatic confidence has been reduced.',
+    );
+  }
+  if (outer.geometryScore < 0.68) {
+    warnings.push(
+      'The detected quadrilateral has inconsistent opposite edges. Confirm all four cyan corners.',
     );
   }
   if (inner.frameType === 'borderless-or-full-art') {
@@ -197,8 +246,22 @@ export async function analyzeCentering(
     );
   }
 
+  const independentReliability = clamp(
+    outer.edgeSupport * 0.5 +
+      outer.aspectScore * 0.22 +
+      outer.geometryScore * 0.28,
+    0,
+    1,
+  );
+  const guidePenalty = hasCaptureGuide
+    ? 0.45 + outer.guideScore * 0.55
+    : 1;
+  const outerReliability = independentReliability * guidePenalty;
   const confidence = clamp(
-    outer.score * 0.65 + inner.support * 0.35,
+    Math.min(
+      outerReliability,
+      outerReliability * 0.76 + inner.support * 0.24,
+    ),
     0,
     1,
   );
@@ -226,7 +289,9 @@ export async function analyzeCentering(
       edgeSupport: outer.edgeSupport,
       aspectScore: outer.aspectScore,
       guideScore: outer.guideScore,
+      geometryScore: outer.geometryScore,
       innerFrameSupport: inner.support,
+      guideReferenced: hasCaptureGuide,
     },
   };
 }
@@ -375,9 +440,10 @@ function detectOuterCandidate(
   height: number,
   expected: CenteringBounds,
   expectedCorners: CenteringCorners,
-  guideProvided: boolean,
+  guidedSearch: boolean,
+  hasCaptureGuide: boolean,
 ): OuterCandidate | null {
-  const searchExpansion = guideProvided ? 0.14 : 0.3;
+  const searchExpansion = guidedSearch ? 0.09 : 0.3;
   const left = fitVerticalSide(
     edges.x,
     width,
@@ -386,6 +452,7 @@ function detectOuterCandidate(
     searchExpansion,
     expected.top,
     expected.bottom,
+    guidedSearch,
   );
   const right = fitVerticalSide(
     edges.x,
@@ -395,6 +462,7 @@ function detectOuterCandidate(
     searchExpansion,
     expected.top,
     expected.bottom,
+    guidedSearch,
   );
   const top = fitHorizontalSide(
     edges.y,
@@ -404,6 +472,7 @@ function detectOuterCandidate(
     searchExpansion,
     expected.left,
     expected.right,
+    guidedSearch,
   );
   const bottom = fitHorizontalSide(
     edges.y,
@@ -413,6 +482,7 @@ function detectOuterCandidate(
     searchExpansion,
     expected.left,
     expected.right,
+    guidedSearch,
   );
   if (!left || !right || !top || !bottom) return null;
 
@@ -452,9 +522,10 @@ function detectOuterCandidate(
   const cardHeight = (leftHeight + rightHeight) / 2;
   const aspect = cardWidth / Math.max(0.001, cardHeight);
   const aspectScore = Math.exp(-Math.abs(Math.log(aspect / CARD_ASPECT)) * 3.2);
-  const guideDistance =
-    cornerDistance(corners, expectedCorners) / Math.SQRT2;
-  const guideScore = Math.exp(-guideDistance * (guideProvided ? 8 : 3.5));
+  const guideDistance = cornerDistance(corners, expectedCorners);
+  const guideScore = hasCaptureGuide
+    ? Math.exp(-guideDistance / 0.065)
+    : Math.exp(-guideDistance * 3.5);
   const edgeSupport = average([
     left.support,
     right.support,
@@ -464,15 +535,57 @@ function detectOuterCandidate(
   const parallelScore =
     Math.exp(-Math.abs(left.slope - right.slope) * 5) *
     Math.exp(-Math.abs(top.slope - bottom.slope) * 5);
+  const oppositeEdgeScore =
+    Math.min(topWidth, bottomWidth) / Math.max(topWidth, bottomWidth) *
+    (Math.min(leftHeight, rightHeight) / Math.max(leftHeight, rightHeight));
+  const guideAlignmentScore = hasCaptureGuide
+    ? Math.exp(
+        -average([
+          Math.abs(left.slope),
+          Math.abs(right.slope),
+          Math.abs(top.slope),
+          Math.abs(bottom.slope),
+        ]) *
+          3.5,
+      )
+    : 1;
+  const cornerAngleScore = average([
+    rightAngleScore(corners.bottomLeft, corners.topLeft, corners.topRight, width, height),
+    rightAngleScore(corners.topLeft, corners.topRight, corners.bottomRight, width, height),
+    rightAngleScore(corners.topRight, corners.bottomRight, corners.bottomLeft, width, height),
+    rightAngleScore(corners.bottomRight, corners.bottomLeft, corners.topLeft, width, height),
+  ]);
+  const geometryScore = clamp(
+    parallelScore * 0.36 +
+      oppositeEdgeScore * 0.28 +
+      cornerAngleScore * 0.24 +
+      guideAlignmentScore * 0.12,
+    0,
+    1,
+  );
   const area = polygonArea(corners);
   const areaScore = clamp((area - 0.08) / 0.32, 0, 1);
-  const score =
-    edgeSupport * 0.42 +
-    aspectScore * 0.24 +
-    guideScore * 0.2 +
-    parallelScore * 0.08 +
-    areaScore * 0.06;
-  return { corners, score, edgeSupport, aspectScore, guideScore };
+  const score = hasCaptureGuide
+    ? edgeSupport * 0.4 +
+      aspectScore * 0.18 +
+      guideScore * 0.22 +
+      geometryScore * 0.16 +
+      areaScore * 0.04
+    : edgeSupport * 0.4 +
+      aspectScore * 0.24 +
+      guideScore * 0.12 +
+      geometryScore * 0.18 +
+      areaScore * 0.06;
+  return {
+    corners,
+    score,
+    edgeSupport,
+    aspectScore,
+    guideScore,
+    geometryScore,
+    guideDistance,
+    guidedSearch,
+  };
 }
 
 function fitVerticalSide(
@@ -483,6 +596,7 @@ function fitVerticalSide(
   searchFraction: number,
   startY: number,
   endY: number,
+  preferExpected: boolean,
 ): FittedLine | null {
   const points: EdgePoint[] = [];
   const minimumX = clamp(
@@ -500,7 +614,15 @@ function fitVerticalSide(
     const y = Math.round(
       (startY + (endY - startY) * fraction) * (height - 1),
     );
-    const peak = strongestEdge(edges, y * width, minimumX, maximumX, 1);
+    const peak = strongestEdge(
+      edges,
+      y * width,
+      minimumX,
+      maximumX,
+      1,
+      preferExpected ? expectedX * width : undefined,
+      preferExpected ? searchFraction * width * 0.45 : undefined,
+    );
     if (peak) points.push({ x: peak.index, y, weight: peak.confidence });
   }
   return robustFit(points, 'vertical', width, height);
@@ -514,6 +636,7 @@ function fitHorizontalSide(
   searchFraction: number,
   startX: number,
   endX: number,
+  preferExpected: boolean,
 ): FittedLine | null {
   const points: EdgePoint[] = [];
   const minimumY = clamp(
@@ -531,7 +654,15 @@ function fitHorizontalSide(
     const x = Math.round(
       (startX + (endX - startX) * fraction) * (width - 1),
     );
-    const peak = strongestEdge(edges, x, minimumY, maximumY, width);
+    const peak = strongestEdge(
+      edges,
+      x,
+      minimumY,
+      maximumY,
+      width,
+      preferExpected ? expectedY * height : undefined,
+      preferExpected ? searchFraction * height * 0.45 : undefined,
+    );
     if (peak) points.push({ x, y: peak.index, weight: peak.confidence });
   }
   return robustFit(points, 'horizontal', width, height);
@@ -543,22 +674,41 @@ function strongestEdge(
   start: number,
   end: number,
   stride: number,
+  expectedIndex?: number,
+  positionSigma?: number,
 ): { index: number; confidence: number } | null {
-  let peakValue = -Infinity;
-  let peakIndex = start;
   let sum = 0;
   let count = 0;
   for (let position = start; position <= end; position += 1) {
     const value = edges[offset + position * stride];
     sum += value;
     count += 1;
-    if (value > peakValue) {
+  }
+  const mean = sum / Math.max(1, count);
+  const minimumValue = mean * 1.18 + 2;
+  let peakValue = -Infinity;
+  let peakScore = -Infinity;
+  let peakIndex = start;
+  for (let position = start; position <= end; position += 1) {
+    const value = edges[offset + position * stride];
+    if (value < minimumValue) continue;
+    const proximity =
+      expectedIndex === undefined || positionSigma === undefined
+        ? 1
+        : 0.12 +
+          Math.exp(
+            -Math.abs(position - expectedIndex) /
+              Math.max(1, positionSigma),
+          ) *
+            0.88;
+    const score = value * proximity;
+    if (score > peakScore) {
+      peakScore = score;
       peakValue = value;
       peakIndex = position;
     }
   }
-  const mean = sum / Math.max(1, count);
-  if (!Number.isFinite(peakValue) || peakValue < mean * 1.18 + 2) return null;
+  if (!Number.isFinite(peakValue)) return null;
   return {
     index: peakIndex,
     confidence: clamp((peakValue - mean) / Math.max(1, peakValue), 0, 1),
@@ -588,7 +738,23 @@ function robustFit(
   }
   const pointSupport = selected.length / SCAN_COUNT;
   const strength = average(selected.map((point) => point.weight));
-  return { ...line, support: clamp(pointSupport * 0.65 + strength * 0.35, 0, 1) };
+  const residualRms = Math.sqrt(
+    average(
+      selected.map(
+        (point) =>
+          lineResidual(line, point, orientation, width, height) ** 2,
+      ),
+    ),
+  );
+  const fitQuality = Math.exp(-residualRms / 0.012);
+  return {
+    ...line,
+    support: clamp(
+      pointSupport * 0.45 + strength * 0.3 + fitQuality * 0.25,
+      0,
+      1,
+    ),
+  };
 }
 
 function weightedRegression(
@@ -973,6 +1139,26 @@ function pointDistancePixels(
     (second.x - first.x) * width,
     (second.y - first.y) * height,
   );
+}
+
+function rightAngleScore(
+  first: CenteringPoint,
+  corner: CenteringPoint,
+  second: CenteringPoint,
+  width: number,
+  height: number,
+): number {
+  const firstX = (first.x - corner.x) * width;
+  const firstY = (first.y - corner.y) * height;
+  const secondX = (second.x - corner.x) * width;
+  const secondY = (second.y - corner.y) * height;
+  const denominator =
+    Math.hypot(firstX, firstY) * Math.hypot(secondX, secondY);
+  if (denominator <= 1e-6) return 0;
+  const cosine = Math.abs(
+    (firstX * secondX + firstY * secondY) / denominator,
+  );
+  return Math.exp(-cosine * 4.5);
 }
 
 function polygonArea(corners: CenteringCorners): number {

@@ -1192,7 +1192,9 @@ function EditableCenteringCard({
           <span>
             {measurement.method === 'manual'
               ? 'Guide source'
-              : 'Automatic confidence'}
+              : measurement.diagnostics?.guideReferenced
+                ? 'Guide-aware confidence'
+                : 'Automatic confidence'}
           </span>
           <strong>
             {measurement.method === 'manual'
@@ -1200,6 +1202,14 @@ function EditableCenteringCard({
               : `${Math.round(measurement.confidence * 100)}%`}
           </strong>
         </div>
+        {measurement.diagnostics?.guideReferenced ? (
+          <div>
+            <span>Camera guide agreement</span>
+            <strong>
+              {Math.round(measurement.diagnostics.guideScore * 100)}%
+            </strong>
+          </div>
+        ) : null}
         <div>
           <span>Inner frame</span>
           <strong>
