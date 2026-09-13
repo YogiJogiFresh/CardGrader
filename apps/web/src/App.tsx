@@ -16,7 +16,7 @@ import {
 
 import {
   analyzeCentering,
-  CenteringBounds,
+  CenteringCorners,
   CenteringMeasurement,
   createManualCenteringMeasurement,
 } from './centering';
@@ -67,8 +67,8 @@ export function App() {
     CenteringMeasurement[] | null
   >(null);
   const [centeringError, setCenteringError] = useState<string | null>(null);
-  const [cameraGuideBounds, setCameraGuideBounds] = useState<
-    Record<string, CenteringBounds>
+  const [cameraGuideCorners, setCameraGuideCorners] = useState<
+    Record<string, CenteringCorners>
   >({});
   const [failedCenteringCaptureIds, setFailedCenteringCaptureIds] = useState<
     string[]
@@ -153,12 +153,12 @@ export function App() {
       const video = videoRef.current;
       if (!cancelled && video?.videoWidth) {
         const frame = cameraFrameRef.current;
-        const guideBounds = calculateCameraGuideBounds(
+        const guideCorners = calculateCameraGuideCorners(
           frame,
           cameraGuideRef.current,
         );
         setCameraGuidance(
-          analyzeVideoFrame(video, guideBounds, elementAspectRatio(frame)),
+          analyzeVideoFrame(video, guideCorners, elementAspectRatio(frame)),
         );
       }
       timer = window.setTimeout(updateGuidance, 700);
@@ -252,7 +252,7 @@ export function App() {
     if (!video || !currentStep || video.videoWidth === 0) {
       return;
     }
-    const guideBounds = calculateCameraGuideBounds(
+    const guideCorners = calculateCameraGuideCorners(
       cameraFrameRef.current,
       cameraGuideRef.current,
     );
@@ -261,7 +261,7 @@ export function App() {
     try {
       const frame = await captureBestFrame(
         video,
-        guideBounds,
+        guideCorners,
         elementAspectRatio(cameraFrameRef.current),
       );
       addCapture(
@@ -269,7 +269,7 @@ export function App() {
         frame.blob,
         frame.width,
         frame.height,
-        frame.guideBounds,
+        frame.guideCorners,
       );
     } catch (error) {
       setCameraGuidance({
@@ -383,15 +383,15 @@ export function App() {
     blob: Blob,
     width: number,
     height: number,
-    guideBounds?: CenteringBounds,
+    guideCorners?: CenteringCorners,
   ) {
     const uri = URL.createObjectURL(blob);
     const capture = createCapture(viewId, { uri, width, height });
     setCaptures((current) => [...current, capture]);
-    if (guideBounds) {
-      setCameraGuideBounds((current) => ({
+    if (guideCorners) {
+      setCameraGuideCorners((current) => ({
         ...current,
-        [capture.id]: guideBounds,
+        [capture.id]: guideCorners,
       }));
     }
     clearCentering();
@@ -401,7 +401,7 @@ export function App() {
     const last = captures.at(-1);
     if (last) {
       URL.revokeObjectURL(last.uri);
-      setCameraGuideBounds((bounds) => withoutKey(bounds, last.id));
+      setCameraGuideCorners((corners) => withoutKey(corners, last.id));
     }
     setCaptures((current) => current.slice(0, -1));
     clearCentering();
@@ -411,7 +411,7 @@ export function App() {
     const removed = captures.find((capture) => capture.id === captureId);
     if (removed) {
       URL.revokeObjectURL(removed.uri);
-      setCameraGuideBounds((bounds) => withoutKey(bounds, removed.id));
+      setCameraGuideCorners((corners) => withoutKey(corners, removed.id));
     }
     setCaptures((current) =>
       current.filter((capture) => capture.id !== captureId),
@@ -452,7 +452,7 @@ export function App() {
   function reset() {
     captures.forEach((capture) => URL.revokeObjectURL(capture.uri));
     setCaptures([]);
-    setCameraGuideBounds({});
+    setCameraGuideCorners({});
     setCaptureMethod(null);
     setCameraOpen(false);
     setUploadOpen(false);
@@ -491,7 +491,7 @@ export function App() {
           const resolvedCapture = capture!;
           return createManualCenteringMeasurement(
             resolvedCapture,
-            cameraGuideBounds[resolvedCapture.id],
+            cameraGuideCorners[resolvedCapture.id],
           );
         });
         setFailedCenteringCaptureIds([]);
@@ -504,7 +504,7 @@ export function App() {
       const results = await Promise.allSettled(
         straightCaptures.map((capture) =>
           analyzeCentering(capture!, {
-            expectedOuterBounds: cameraGuideBounds[capture!.id],
+            expectedOuterCorners: cameraGuideCorners[capture!.id],
           }),
         ),
       );
@@ -1089,10 +1089,10 @@ function scrollToElement(id: string) {
   });
 }
 
-function calculateCameraGuideBounds(
+function calculateCameraGuideCorners(
   frame: HTMLDivElement | null,
   guide: HTMLDivElement | null,
-): CenteringBounds | null {
+): CenteringCorners | null {
   if (!frame || !guide) {
     return null;
   }
@@ -1103,19 +1103,23 @@ function calculateCameraGuideBounds(
     return null;
   }
 
+  const left = clampUnit(
+    (guideRect.left - frameRect.left) / frameRect.width,
+  );
+  const top = clampUnit(
+    (guideRect.top - frameRect.top) / frameRect.height,
+  );
+  const right = clampUnit(
+    (guideRect.right - frameRect.left) / frameRect.width,
+  );
+  const bottom = clampUnit(
+    (guideRect.bottom - frameRect.top) / frameRect.height,
+  );
   return {
-    left: clampUnit(
-      (guideRect.left - frameRect.left) / frameRect.width,
-    ),
-    top: clampUnit(
-      (guideRect.top - frameRect.top) / frameRect.height,
-    ),
-    right: clampUnit(
-      (guideRect.right - frameRect.left) / frameRect.width,
-    ),
-    bottom: clampUnit(
-      (guideRect.bottom - frameRect.top) / frameRect.height,
-    ),
+    topLeft: { x: left, y: top },
+    topRight: { x: right, y: top },
+    bottomRight: { x: right, y: bottom },
+    bottomLeft: { x: left, y: bottom },
   };
 }
 

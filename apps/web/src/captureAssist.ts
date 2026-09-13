@@ -1,4 +1,13 @@
-import { CenteringBounds } from './centering';
+import {
+  boundsFromCorners,
+  CenteringBounds,
+  CenteringCorners,
+} from './centering';
+import {
+  computeSymmetricGuideCrop,
+  computeVisibleSourceRect,
+  validateGuideCorners,
+} from './captureGeometry.mjs';
 
 export interface CameraGuidance {
   status: 'ready' | 'warning';
@@ -11,14 +20,14 @@ export interface CapturedFrame {
   width: number;
   height: number;
   qualityScore: number;
-  guideBounds?: CenteringBounds;
+  guideCorners?: CenteringCorners;
 }
 
 const GUIDANCE_WIDTH = 260;
 
 export function analyzeVideoFrame(
   video: HTMLVideoElement,
-  guideBounds?: CenteringBounds | null,
+  guideCorners?: CenteringCorners | null,
   viewportAspectRatio?: number,
 ): CameraGuidance {
   if (video.videoWidth <= 0 || video.videoHeight <= 0) {
@@ -28,10 +37,19 @@ export function analyzeVideoFrame(
       score: 0,
     };
   }
-  if (!guideBounds) {
+  if (!guideCorners) {
     return {
       status: 'warning',
       message: 'Waiting for the camera guide to be measured…',
+      score: 0,
+    };
+  }
+  try {
+    validateGuideCorners(guideCorners);
+  } catch {
+    return {
+      status: 'warning',
+      message: 'Waiting for a stable camera guide…',
       score: 0,
     };
   }
@@ -53,7 +71,7 @@ export function analyzeVideoFrame(
     pixels,
     canvas.width,
     canvas.height,
-    guideBounds,
+    boundsFromCorners(guideCorners),
   );
   if (metrics.glareFraction > 0.075) {
     return {
@@ -83,7 +101,7 @@ export function analyzeVideoFrame(
       score: metrics.score,
     };
   }
-  if (guideBounds && metrics.boundaryContrast < 10) {
+  if (guideCorners && metrics.boundaryContrast < 10) {
     return {
       status: 'warning',
       message: 'Increase contrast between the card edge and the background.',
@@ -99,7 +117,7 @@ export function analyzeVideoFrame(
 
 export async function captureBestFrame(
   video: HTMLVideoElement,
-  guideBounds?: CenteringBounds | null,
+  guideCorners?: CenteringCorners | null,
   viewportAspectRatio?: number,
   frameCount = 3,
 ): Promise<CapturedFrame> {
@@ -125,7 +143,7 @@ export async function captureBestFrame(
       pixels,
       preview.width,
       preview.height,
-      guideBounds ?? undefined,
+      guideCorners ? boundsFromCorners(guideCorners) : undefined,
     );
     if (metrics.score > bestScore) {
       bestCanvas = canvas;
@@ -138,78 +156,55 @@ export async function captureBestFrame(
   if (!bestCanvas) {
     throw new Error('No camera frame could be captured.');
   }
-  const cropped = cropCanvasToGuide(bestCanvas, guideBounds);
+  const cropped = cropCanvasToGuide(bestCanvas, guideCorners);
   return {
     blob: await canvasToJpeg(cropped.canvas),
     width: cropped.canvas.width,
     height: cropped.canvas.height,
     qualityScore: bestScore,
-    guideBounds: cropped.guideBounds,
+    guideCorners: cropped.guideCorners,
   };
 }
 
 function cropCanvasToGuide(
   source: HTMLCanvasElement,
-  guideBounds?: CenteringBounds | null,
-): { canvas: HTMLCanvasElement; guideBounds?: CenteringBounds } {
-  if (!guideBounds) {
+  guideCorners?: CenteringCorners | null,
+): { canvas: HTMLCanvasElement; guideCorners?: CenteringCorners } {
+  if (!guideCorners) {
     return { canvas: source };
   }
+  const guideBounds = boundsFromCorners(guideCorners);
   const guideWidth = guideBounds.right - guideBounds.left;
   const guideHeight = guideBounds.bottom - guideBounds.top;
   if (guideWidth <= 0 || guideHeight <= 0) {
     return { canvas: source };
   }
-  const paddingX = guideWidth * 0.16;
-  const paddingY = guideHeight * 0.16;
-  const cropLeft = clamp(
-    Math.floor((guideBounds.left - paddingX) * source.width),
-    0,
-    source.width - 1,
-  );
-  const cropTop = clamp(
-    Math.floor((guideBounds.top - paddingY) * source.height),
-    0,
-    source.height - 1,
-  );
-  const cropRight = clamp(
-    Math.ceil((guideBounds.right + paddingX) * source.width),
-    cropLeft + 1,
+  const crop = computeSymmetricGuideCrop(
     source.width,
-  );
-  const cropBottom = clamp(
-    Math.ceil((guideBounds.bottom + paddingY) * source.height),
-    cropTop + 1,
     source.height,
+    guideCorners,
   );
-  const cropWidth = cropRight - cropLeft;
-  const cropHeight = cropBottom - cropTop;
   const canvas = document.createElement('canvas');
-  canvas.width = cropWidth;
-  canvas.height = cropHeight;
+  canvas.width = crop.width;
+  canvas.height = crop.height;
   const context = canvas.getContext('2d');
   if (!context) {
     throw new Error('This browser cannot crop the selected camera frame.');
   }
   context.drawImage(
     source,
-    cropLeft,
-    cropTop,
-    cropWidth,
-    cropHeight,
+    crop.x,
+    crop.y,
+    crop.width,
+    crop.height,
     0,
     0,
-    cropWidth,
-    cropHeight,
+    crop.width,
+    crop.height,
   );
   return {
     canvas,
-    guideBounds: {
-      left: (guideBounds.left * source.width - cropLeft) / cropWidth,
-      top: (guideBounds.top * source.height - cropTop) / cropHeight,
-      right: (guideBounds.right * source.width - cropLeft) / cropWidth,
-      bottom: (guideBounds.bottom * source.height - cropTop) / cropHeight,
-    },
+    guideCorners: crop.guideCorners,
   };
 }
 
@@ -220,38 +215,27 @@ function renderVisibleVideoFrame(
 ): HTMLCanvasElement {
   const sourceWidth = video.videoWidth;
   const sourceHeight = video.videoHeight;
-  const sourceAspectRatio = sourceWidth / sourceHeight;
-  const targetAspectRatio =
-    viewportAspectRatio && viewportAspectRatio > 0
-      ? viewportAspectRatio
-      : sourceAspectRatio;
-  let sourceX = 0;
-  let sourceY = 0;
-  let visibleWidth = sourceWidth;
-  let visibleHeight = sourceHeight;
-  if (sourceAspectRatio > targetAspectRatio) {
-    visibleWidth = sourceHeight * targetAspectRatio;
-    sourceX = (sourceWidth - visibleWidth) / 2;
-  } else if (sourceAspectRatio < targetAspectRatio) {
-    visibleHeight = sourceWidth / targetAspectRatio;
-    sourceY = (sourceHeight - visibleHeight) / 2;
-  }
+  const visible = computeVisibleSourceRect(
+    sourceWidth,
+    sourceHeight,
+    viewportAspectRatio,
+  );
   const scale = maximumWidth
-    ? Math.min(1, maximumWidth / Math.max(1, visibleWidth))
+    ? Math.min(1, maximumWidth / Math.max(1, visible.width))
     : 1;
   const canvas = document.createElement('canvas');
-  canvas.width = Math.max(1, Math.round(visibleWidth * scale));
-  canvas.height = Math.max(1, Math.round(visibleHeight * scale));
+  canvas.width = Math.max(1, Math.round(visible.width * scale));
+  canvas.height = Math.max(1, Math.round(visible.height * scale));
   const context = canvas.getContext('2d');
   if (!context) {
     throw new Error('This browser cannot prepare camera images.');
   }
   context.drawImage(
     video,
-    sourceX,
-    sourceY,
-    visibleWidth,
-    visibleHeight,
+    visible.x,
+    visible.y,
+    visible.width,
+    visible.height,
     0,
     0,
     canvas.width,

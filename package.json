@@ -35,6 +35,8 @@
     "pwa:dev": "npm run dev --workspace @cardgrader/web",
     "pwa:preview": "npm run preview --workspace @cardgrader/web",
     "calibrate:centering": "node scripts/calibrate-centering.mjs",
+    "test:guide-geometry": "node scripts/test-guide-geometry.mjs",
+    "verify:guide-detection": "npm run typecheck:all && npm run test:guide-geometry && npm run pwa:build:github-pages",
     "typecheck": "tsc --noEmit",
     "typecheck:all": "npm run typecheck && npm run typecheck --workspace @cardgrader/web",
     "web": "expo start --web"

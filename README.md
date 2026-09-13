@@ -35,13 +35,14 @@ detection confidence and are green at 55/45 or better, yellow through 60/40,
 and red beyond 60/40.
 
 For camera captures, the framing guide is the primary outer-edge reference.
-The detector first searches close to the guide, requires independent edge and
-shape support, and reduces confidence when the fitted card disagrees with the
-guide or forms an implausibly skewed quadrilateral. Detected corners refine the
-captured guide rather than replacing it outright; the permitted adjustment
-increases only when independent edge and geometry evidence is strong. A wider
-search is used only when the close guide search cannot produce a reliable
-candidate.
+The detector searches narrow bands along each side of the guide quadrilateral,
+requires independent edge, line-fit, geometry, and cross-variant support, and
+reduces confidence when the fitted card disagrees with the guide. Detected
+corners refine the captured guide rather than replacing it outright and can
+move no more than 5% of the cropped image. If pixel evidence is weak, the cyan
+overlay remains exactly on the camera guide and is explicitly labeled as a
+low-confidence camera-guide fallback. Uploads without guide metadata retain
+the broader automatic search and manual fallback.
 
 While the camera is open, local frame checks warn about blur, glare,
 overexposure, underexposure, and weak card/background contrast. Capturing takes

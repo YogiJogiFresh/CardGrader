@@ -1,4 +1,8 @@
 import { Capture } from '@cardgrader/domain';
+import {
+  computeCornerAgreement,
+  constrainPointToGuide,
+} from './captureGeometry.mjs';
 
 const MAX_ANALYSIS_DIMENSION = 1000;
 const CARD_ASPECT = 2.5 / 3.5;
@@ -27,12 +31,13 @@ export interface CenteringBounds {
 
 export interface CenteringAnalysisOptions {
   expectedOuterBounds?: CenteringBounds;
+  expectedOuterCorners?: CenteringCorners;
 }
 
 export interface CenteringMeasurement {
   captureId: string;
   viewId: Capture['viewId'];
-  method: 'automatic' | 'manual';
+  method: 'automatic' | 'guide' | 'manual';
   frameType: 'bordered' | 'borderless-or-full-art' | 'uncertain';
   outerBounds: CenteringBounds;
   innerBounds: CenteringBounds;
@@ -54,6 +59,7 @@ export interface CenteringMeasurement {
     aspectScore: number;
     guideScore: number;
     geometryScore: number;
+    agreementScore: number;
     innerFrameSupport: number;
     guideReferenced: boolean;
   };
@@ -85,6 +91,7 @@ interface FittedLine {
 
 interface OuterCandidate {
   corners: CenteringCorners;
+  detectedCorners: CenteringCorners;
   score: number;
   edgeSupport: number;
   aspectScore: number;
@@ -92,6 +99,8 @@ interface OuterCandidate {
   geometryScore: number;
   guideDistance: number;
   guidedSearch: boolean;
+  agreementScore: number;
+  refinementUsedGuide: boolean;
 }
 
 interface InnerFrameDetection {
@@ -105,9 +114,16 @@ interface InnerFrameDetection {
 
 export function createManualCenteringMeasurement(
   capture: Capture,
-  outerBounds = defaultManualOuterBounds(capture),
+  guide?: CenteringBounds | CenteringCorners,
 ): CenteringMeasurement {
-  const innerBounds = insetBounds(outerBounds, 0.08);
+  const outerCorners = guide
+    ? isCenteringCorners(guide)
+      ? guide
+      : cornersFromBounds(guide)
+    : cornersFromBounds(defaultManualOuterBounds(capture));
+  const outerBounds = boundsFromCorners(outerCorners);
+  const innerCorners = insetCorners(outerCorners, 0.08);
+  const innerBounds = boundsFromCorners(innerCorners);
   return {
     captureId: capture.id,
     viewId: capture.viewId,
@@ -115,8 +131,8 @@ export function createManualCenteringMeasurement(
     frameType: 'uncertain',
     outerBounds,
     innerBounds,
-    outerCorners: cornersFromBounds(outerBounds),
-    innerCorners: cornersFromBounds(innerBounds),
+    outerCorners,
+    innerCorners,
     horizontal: { leftPercent: 50, rightPercent: 50 },
     vertical: { topPercent: 50, bottomPercent: 50 },
     confidence: 0,
@@ -148,11 +164,15 @@ export async function analyzeCentering(
   context.drawImage(image, 0, 0, width, height);
   const pixels = context.getImageData(0, 0, width, height).data;
   const channels = createChannels(pixels, width, height);
-  const expectedBounds =
-    options.expectedOuterBounds ?? defaultManualOuterBounds(capture);
-  const expectedCorners = cornersFromBounds(expectedBounds);
+  const expectedCorners =
+    options.expectedOuterCorners ??
+    cornersFromBounds(
+      options.expectedOuterBounds ?? defaultManualOuterBounds(capture),
+    );
   const variants = createEdgeVariants(channels, width, height);
-  const hasCaptureGuide = Boolean(options.expectedOuterBounds);
+  const hasCaptureGuide = Boolean(
+    options.expectedOuterCorners ?? options.expectedOuterBounds,
+  );
   const guidedCandidates = hasCaptureGuide
     ? variants
         .map((edges) =>
@@ -160,7 +180,6 @@ export async function analyzeCentering(
             edges,
             width,
             height,
-            expectedBounds,
             expectedCorners,
             true,
             true,
@@ -169,37 +188,49 @@ export async function analyzeCentering(
         .filter((candidate): candidate is OuterCandidate => candidate !== null)
         .filter(
           (candidate) =>
-            candidate.guideDistance <= 0.1 &&
-            candidate.edgeSupport >= 0.38 &&
-            candidate.aspectScore >= 0.5 &&
-            candidate.geometryScore >= 0.42,
+            candidate.guideDistance <= 0.08 &&
+            candidate.edgeSupport >= 0.42 &&
+            candidate.aspectScore >= 0.55 &&
+            candidate.geometryScore >= 0.48,
         )
     : [];
-  const broadCandidates = variants
-    .map((edges) =>
-      detectOuterCandidate(
-        edges,
-        width,
-        height,
-        expectedBounds,
-        expectedCorners,
-        false,
-        hasCaptureGuide,
-      ),
-    )
-    .filter((candidate): candidate is OuterCandidate => candidate !== null)
-    .filter(
-      (candidate) =>
-        candidate.edgeSupport >= 0.4 &&
-        candidate.aspectScore >= 0.45 &&
-        candidate.geometryScore >= 0.42,
-    );
-  const candidates = (
-    guidedCandidates.length > 0 ? guidedCandidates : broadCandidates
-  ).sort((first, second) => second.score - first.score);
-  const outer = candidates[0];
+  const broadCandidates = hasCaptureGuide
+    ? []
+    : variants
+        .map((edges) =>
+          detectOuterCandidate(
+            edges,
+            width,
+            height,
+            expectedCorners,
+            false,
+            false,
+          ),
+        )
+        .filter((candidate): candidate is OuterCandidate => candidate !== null)
+        .filter(
+          (candidate) =>
+            candidate.edgeSupport >= 0.4 &&
+            candidate.aspectScore >= 0.45 &&
+            candidate.geometryScore >= 0.42,
+        );
+  const candidates = hasCaptureGuide ? guidedCandidates : broadCandidates;
+  const rankedCandidates = rankCandidatesByAgreement(candidates);
+  const detectedOuter = rankedCandidates[0];
+  const useGuideFallback =
+    hasCaptureGuide &&
+    (!detectedOuter ||
+      detectedOuter.score < 0.48 ||
+      detectedOuter.edgeSupport < 0.48 ||
+      detectedOuter.aspectScore < 0.65 ||
+      detectedOuter.geometryScore < 0.58 ||
+      detectedOuter.agreementScore < 0.45 ||
+      detectedOuter.refinementUsedGuide);
+  const outer = useGuideFallback
+    ? createGuideCandidate(expectedCorners, width, height)
+    : detectedOuter;
 
-  if (!outer || outer.score < (hasCaptureGuide ? 0.42 : 0.36)) {
+  if (!outer || (!hasCaptureGuide && outer.score < 0.36)) {
     throw new Error(
       'The card edges could not be separated from the background. Continue with manual overlays or retake the picture with more visible background contrast.',
     );
@@ -216,14 +247,13 @@ export async function analyzeCentering(
   const vertical = percentages(inner.top, 1 - inner.bottom);
   const warnings: string[] = [];
 
-  if (outer.score < 0.58) {
+  if (useGuideFallback) {
+    warnings.push(
+      'Pixel edges were not reliable enough to refine the camera guide. The cyan overlay remains on the captured guide and should be verified manually.',
+    );
+  } else if (outer.score < 0.58) {
     warnings.push(
       'Outer-edge confidence is limited. Confirm that every cyan corner follows the physical card edge.',
-    );
-  }
-  if (hasCaptureGuide && !outer.guidedSearch) {
-    warnings.push(
-      'A reliable edge was not found close to the camera guide. A wider search was used, so verify the cyan overlay carefully.',
     );
   }
   if (hasCaptureGuide && outer.guideScore < 0.62) {
@@ -265,17 +295,19 @@ export async function analyzeCentering(
     0,
     1,
   );
-  const confidence = clamp(
-    confidenceBeforeCalibration ** 1.35 *
-      0.92 *
-      (outer.guidedSearch || !hasCaptureGuide ? 1 : 0.82),
-    0,
-    0.92,
-  );
+  const confidence = useGuideFallback
+    ? 0.15
+    : clamp(
+        confidenceBeforeCalibration ** 1.45 *
+          0.88 *
+          (0.72 + outer.agreementScore * 0.28),
+        0,
+        0.88,
+      );
   return {
     captureId: capture.id,
     viewId: capture.viewId,
-    method: 'automatic',
+    method: useGuideFallback ? 'guide' : 'automatic',
     frameType: inner.frameType,
     outerBounds: boundsFromCorners(outer.corners),
     innerBounds: boundsFromCorners(innerCorners),
@@ -297,6 +329,7 @@ export async function analyzeCentering(
       aspectScore: outer.aspectScore,
       guideScore: outer.guideScore,
       geometryScore: outer.geometryScore,
+      agreementScore: outer.agreementScore,
       innerFrameSupport: inner.support,
       guideReferenced: hasCaptureGuide,
     },
@@ -445,50 +478,45 @@ function detectOuterCandidate(
   edges: EdgeMaps,
   width: number,
   height: number,
-  expected: CenteringBounds,
   expectedCorners: CenteringCorners,
   guidedSearch: boolean,
   hasCaptureGuide: boolean,
 ): OuterCandidate | null {
-  const searchExpansion = guidedSearch ? 0.09 : 0.3;
+  const searchExpansion = guidedSearch ? 0.06 : 0.3;
   const left = fitVerticalSide(
     edges.x,
     width,
     height,
-    expected.left,
+    expectedCorners.topLeft,
+    expectedCorners.bottomLeft,
     searchExpansion,
-    expected.top,
-    expected.bottom,
     guidedSearch,
   );
   const right = fitVerticalSide(
     edges.x,
     width,
     height,
-    expected.right,
+    expectedCorners.topRight,
+    expectedCorners.bottomRight,
     searchExpansion,
-    expected.top,
-    expected.bottom,
     guidedSearch,
   );
   const top = fitHorizontalSide(
     edges.y,
     width,
     height,
-    expected.top,
+    expectedCorners.topLeft,
+    expectedCorners.topRight,
     searchExpansion,
-    expected.left,
-    expected.right,
     guidedSearch,
   );
   const bottom = fitHorizontalSide(
     edges.y,
     width,
     height,
-    expected.bottom,
+    expectedCorners.bottomLeft,
+    expectedCorners.bottomRight,
     searchExpansion,
-    expected.left,
-    expected.right,
     guidedSearch,
   );
   if (!left || !right || !top || !bottom) return null;
@@ -548,10 +576,34 @@ function detectOuterCandidate(
   const guideAlignmentScore = hasCaptureGuide
     ? Math.exp(
         -average([
-          Math.abs(left.slope),
-          Math.abs(right.slope),
-          Math.abs(top.slope),
-          Math.abs(bottom.slope),
+          Math.abs(
+            left.slope -
+              verticalGuideSlope(
+                expectedCorners.topLeft,
+                expectedCorners.bottomLeft,
+              ),
+          ),
+          Math.abs(
+            right.slope -
+              verticalGuideSlope(
+                expectedCorners.topRight,
+                expectedCorners.bottomRight,
+              ),
+          ),
+          Math.abs(
+            top.slope -
+              horizontalGuideSlope(
+                expectedCorners.topLeft,
+                expectedCorners.topRight,
+              ),
+          ),
+          Math.abs(
+            bottom.slope -
+              horizontalGuideSlope(
+                expectedCorners.bottomLeft,
+                expectedCorners.bottomRight,
+              ),
+          ),
         ]) *
           3.5,
       )
@@ -563,10 +615,9 @@ function detectOuterCandidate(
     rightAngleScore(corners.bottomRight, corners.bottomLeft, corners.topLeft, width, height),
   ]);
   const geometryScore = clamp(
-    parallelScore * 0.36 +
-      oppositeEdgeScore * 0.28 +
-      cornerAngleScore * 0.24 +
-      guideAlignmentScore * 0.12,
+    parallelScore * 0.42 +
+      oppositeEdgeScore * 0.32 +
+      cornerAngleScore * 0.26,
     0,
     1,
   );
@@ -576,14 +627,15 @@ function detectOuterCandidate(
     ? edgeSupport * 0.4 +
       aspectScore * 0.18 +
       guideScore * 0.22 +
-      geometryScore * 0.16 +
+      geometryScore * 0.13 +
+      guideAlignmentScore * 0.03 +
       areaScore * 0.04
     : edgeSupport * 0.4 +
       aspectScore * 0.24 +
       guideScore * 0.12 +
       geometryScore * 0.18 +
       areaScore * 0.06;
-  const outputCorners = hasCaptureGuide
+  const refinement = hasCaptureGuide
     ? refineGuideCorners(
         expectedCorners,
         corners,
@@ -591,9 +643,10 @@ function detectOuterCandidate(
         geometryScore,
         guidedSearch,
       )
-    : corners;
+    : { corners, usedGuideFallback: false };
   return {
-    corners: outputCorners,
+    corners: refinement.corners,
+    detectedCorners: corners,
     score,
     edgeSupport,
     aspectScore,
@@ -601,6 +654,90 @@ function detectOuterCandidate(
     geometryScore,
     guideDistance,
     guidedSearch,
+    agreementScore: 0,
+    refinementUsedGuide: refinement.usedGuideFallback,
+  };
+}
+
+function verticalGuideSlope(
+  start: CenteringPoint,
+  end: CenteringPoint,
+): number {
+  return (end.x - start.x) / Math.max(1e-6, end.y - start.y);
+}
+
+function horizontalGuideSlope(
+  start: CenteringPoint,
+  end: CenteringPoint,
+): number {
+  return (end.y - start.y) / Math.max(1e-6, end.x - start.x);
+}
+
+function rankCandidatesByAgreement(
+  candidates: OuterCandidate[],
+): OuterCandidate[] {
+  return candidates
+    .map((candidate) => {
+      const peers = candidates.filter((other) => other !== candidate);
+      const agreementScore = computeCornerAgreement(
+        candidate.detectedCorners,
+        peers.map((other) => other.detectedCorners),
+      );
+      return {
+        ...candidate,
+        agreementScore,
+        score: candidate.score * 0.82 + agreementScore * 0.18,
+      };
+    })
+    .sort((first, second) => second.score - first.score);
+}
+
+function createGuideCandidate(
+  guide: CenteringCorners,
+  width: number,
+  height: number,
+): OuterCandidate {
+  const topWidth = pointDistancePixels(
+    guide.topLeft,
+    guide.topRight,
+    width,
+    height,
+  );
+  const bottomWidth = pointDistancePixels(
+    guide.bottomLeft,
+    guide.bottomRight,
+    width,
+    height,
+  );
+  const leftHeight = pointDistancePixels(
+    guide.topLeft,
+    guide.bottomLeft,
+    width,
+    height,
+  );
+  const rightHeight = pointDistancePixels(
+    guide.topRight,
+    guide.bottomRight,
+    width,
+    height,
+  );
+  const aspect =
+    ((topWidth + bottomWidth) / 2) /
+    Math.max(0.001, (leftHeight + rightHeight) / 2);
+  return {
+    corners: guide,
+    detectedCorners: guide,
+    score: 0,
+    edgeSupport: 0,
+    aspectScore: Math.exp(
+      -Math.abs(Math.log(aspect / CARD_ASPECT)) * 3.2,
+    ),
+    guideScore: 1,
+    geometryScore: 1,
+    guideDistance: 0,
+    guidedSearch: true,
+    agreementScore: 0,
+    refinementUsedGuide: true,
   };
 }
 
@@ -610,13 +747,13 @@ function refineGuideCorners(
   edgeSupport: number,
   geometryScore: number,
   guidedSearch: boolean,
-): CenteringCorners {
+): { corners: CenteringCorners; usedGuideFallback: boolean } {
   const independentEvidence =
     clamp((edgeSupport - 0.35) / 0.5, 0, 1) *
     clamp((geometryScore - 0.35) / 0.65, 0, 1);
   const refinementStrength =
     0.08 + independentEvidence * (guidedSearch ? 0.82 : 0.68);
-  const maximumShift = guidedSearch ? 0.075 : 0.1;
+  const maximumShift = 0.05;
   const refined = {
     topLeft: refineGuideCorner(
       guide.topLeft,
@@ -643,7 +780,9 @@ function refineGuideCorners(
       maximumShift,
     ),
   };
-  return isValidCardQuad(refined) ? refined : guide;
+  return isValidCardQuad(refined)
+    ? { corners: refined, usedGuideFallback: false }
+    : { corners: guide, usedGuideFallback: true };
 }
 
 function refineGuideCorner(
@@ -652,43 +791,34 @@ function refineGuideCorner(
   strength: number,
   maximumShift: number,
 ): CenteringPoint {
-  const deltaX = detected.x - guide.x;
-  const deltaY = detected.y - guide.y;
-  const distance = Math.hypot(deltaX, deltaY);
-  const scale =
-    distance > maximumShift ? maximumShift / distance : 1;
-  return {
-    x: clamp(guide.x + deltaX * scale * strength, 0, 1),
-    y: clamp(guide.y + deltaY * scale * strength, 0, 1),
-  };
+  return constrainPointToGuide(guide, detected, strength, maximumShift);
 }
 
 function fitVerticalSide(
   edges: Float32Array,
   width: number,
   height: number,
-  expectedX: number,
+  start: CenteringPoint,
+  end: CenteringPoint,
   searchFraction: number,
-  startY: number,
-  endY: number,
   preferExpected: boolean,
 ): FittedLine | null {
   const points: EdgePoint[] = [];
-  const minimumX = clamp(
-    Math.round((expectedX - searchFraction) * width),
-    1,
-    width - 2,
-  );
-  const maximumX = clamp(
-    Math.round((expectedX + searchFraction) * width),
-    1,
-    width - 2,
-  );
   for (let sample = 0; sample < SCAN_COUNT; sample += 1) {
     const fraction = (sample + 0.5) / SCAN_COUNT;
-    const y = Math.round(
-      (startY + (endY - startY) * fraction) * (height - 1),
+    const expectedX = start.x + (end.x - start.x) * fraction;
+    const expectedY = start.y + (end.y - start.y) * fraction;
+    const minimumX = clamp(
+      Math.round((expectedX - searchFraction) * width),
+      1,
+      width - 2,
     );
+    const maximumX = clamp(
+      Math.round((expectedX + searchFraction) * width),
+      1,
+      width - 2,
+    );
+    const y = Math.round(expectedY * (height - 1));
     const peak = strongestEdge(
       edges,
       y * width,
@@ -707,28 +837,27 @@ function fitHorizontalSide(
   edges: Float32Array,
   width: number,
   height: number,
-  expectedY: number,
+  start: CenteringPoint,
+  end: CenteringPoint,
   searchFraction: number,
-  startX: number,
-  endX: number,
   preferExpected: boolean,
 ): FittedLine | null {
   const points: EdgePoint[] = [];
-  const minimumY = clamp(
-    Math.round((expectedY - searchFraction) * height),
-    1,
-    height - 2,
-  );
-  const maximumY = clamp(
-    Math.round((expectedY + searchFraction) * height),
-    1,
-    height - 2,
-  );
   for (let sample = 0; sample < SCAN_COUNT; sample += 1) {
     const fraction = (sample + 0.5) / SCAN_COUNT;
-    const x = Math.round(
-      (startX + (endX - startX) * fraction) * (width - 1),
+    const expectedX = start.x + (end.x - start.x) * fraction;
+    const expectedY = start.y + (end.y - start.y) * fraction;
+    const minimumY = clamp(
+      Math.round((expectedY - searchFraction) * height),
+      1,
+      height - 2,
     );
+    const maximumY = clamp(
+      Math.round((expectedY + searchFraction) * height),
+      1,
+      height - 2,
+    );
+    const x = Math.round(expectedX * (width - 1));
     const peak = strongestEdge(
       edges,
       x,
@@ -1130,21 +1259,39 @@ function defaultManualOuterBounds(capture: Capture): CenteringBounds {
   };
 }
 
-function insetBounds(
-  bounds: CenteringBounds,
+function insetCorners(
+  corners: CenteringCorners,
   fraction: number,
-): CenteringBounds {
-  const horizontalInset = (bounds.right - bounds.left) * fraction;
-  const verticalInset = (bounds.bottom - bounds.top) * fraction;
+): CenteringCorners {
+  const center = {
+    x:
+      (corners.topLeft.x +
+        corners.topRight.x +
+        corners.bottomRight.x +
+        corners.bottomLeft.x) /
+      4,
+    y:
+      (corners.topLeft.y +
+        corners.topRight.y +
+        corners.bottomRight.y +
+        corners.bottomLeft.y) /
+      4,
+  };
+  const inset = (point: CenteringPoint) => ({
+    x: point.x + (center.x - point.x) * fraction * 2,
+    y: point.y + (center.y - point.y) * fraction * 2,
+  });
   return {
-    left: bounds.left + horizontalInset,
-    top: bounds.top + verticalInset,
-    right: bounds.right - horizontalInset,
-    bottom: bounds.bottom - verticalInset,
+    topLeft: inset(corners.topLeft),
+    topRight: inset(corners.topRight),
+    bottomRight: inset(corners.bottomRight),
+    bottomLeft: inset(corners.bottomLeft),
   };
 }
 
-function cornersFromBounds(bounds: CenteringBounds): CenteringCorners {
+export function cornersFromBounds(
+  bounds: CenteringBounds,
+): CenteringCorners {
   return {
     topLeft: { x: bounds.left, y: bounds.top },
     topRight: { x: bounds.right, y: bounds.top },
@@ -1153,7 +1300,9 @@ function cornersFromBounds(bounds: CenteringBounds): CenteringCorners {
   };
 }
 
-function boundsFromCorners(corners: CenteringCorners): CenteringBounds {
+export function boundsFromCorners(
+  corners: CenteringCorners,
+): CenteringBounds {
   const points = Object.values(corners);
   return {
     left: Math.min(...points.map((point) => point.x)),
@@ -1161,6 +1310,12 @@ function boundsFromCorners(corners: CenteringCorners): CenteringBounds {
     right: Math.max(...points.map((point) => point.x)),
     bottom: Math.max(...points.map((point) => point.y)),
   };
+}
+
+function isCenteringCorners(
+  value: CenteringBounds | CenteringCorners,
+): value is CenteringCorners {
+  return 'topLeft' in value;
 }
 
 function percentages(

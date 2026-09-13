@@ -1126,7 +1126,7 @@ function EditableCenteringCard({
         <h3>{viewTitle(measurement.viewId)}</h3>
         <span
           className={
-            measurement.method === 'manual' || manuallyAdjusted
+            measurement.method !== 'automatic' || manuallyAdjusted
               ? 'manual-badge'
               : 'automatic-badge'
           }
@@ -1135,6 +1135,10 @@ function EditableCenteringCard({
             ? manuallyAdjusted
               ? 'Manual overlay adjusted'
               : 'Manual overlay'
+            : measurement.method === 'guide'
+              ? manuallyAdjusted
+                ? 'Guide overlay adjusted'
+                : 'Camera guide fallback'
             : manuallyAdjusted
               ? 'Manually adjusted'
               : 'Automatic detection'}
@@ -1192,6 +1196,8 @@ function EditableCenteringCard({
           <span>
             {measurement.method === 'manual'
               ? 'Guide source'
+              : measurement.method === 'guide'
+                ? 'Guide-based confidence'
               : measurement.diagnostics?.guideReferenced
                 ? 'Guide-aware confidence'
                 : 'Automatic confidence'}
@@ -1202,7 +1208,8 @@ function EditableCenteringCard({
               : `${Math.round(measurement.confidence * 100)}%`}
           </strong>
         </div>
-        {measurement.diagnostics?.guideReferenced ? (
+        {measurement.method !== 'guide' &&
+        measurement.diagnostics?.guideReferenced ? (
           <div>
             <span>Camera guide agreement</span>
             <strong>
@@ -1230,6 +1237,8 @@ function EditableCenteringCard({
         Reset guides to{' '}
         {measurement.method === 'manual'
           ? 'manual starting position'
+          : measurement.method === 'guide'
+            ? 'camera guide'
           : 'automatic detection'}
       </button>
       {measurement.warnings.map((warning) => (
