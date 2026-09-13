@@ -17,6 +17,9 @@ view and accepts a replacement upload or camera capture.
 The capture page starts with a camera-or-upload choice. Camera, upload, review,
 and centering are collapsible sections, and successful captures automatically
 open and smoothly scroll to the next required capture or analysis action.
+Only the selected Camera or Upload section is rendered. The camera guide turns
+green when the local quality checks consider the frame usable, and each capture
+button names the requested view.
 A shortcut rail appears to the left on wide screens and becomes a horizontally
 scrollable bar on smaller screens, allowing direct navigation to every
 available workflow and result section.
@@ -42,8 +45,11 @@ candidate.
 
 While the camera is open, local frame checks warn about blur, glare,
 overexposure, underexposure, and weak card/background contrast. Capturing takes
-a short three-frame burst and retains only the highest-scoring frame. No burst
-frame or diagnostic leaves the browser.
+a short three-frame burst and retains only the highest-scoring frame. The
+selected frame is cropped around the camera guide with a small surrounding
+margin large enough for edge searching, so later analysis remains focused
+while retaining visible
+background on every side. No burst frame or diagnostic leaves the browser.
 
 If automatic card-edge detection cannot separate the card from its background,
 the user can continue with fully manual overlays without running detection

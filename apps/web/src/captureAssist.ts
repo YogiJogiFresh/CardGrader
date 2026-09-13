@@ -11,6 +11,7 @@ export interface CapturedFrame {
   width: number;
   height: number;
   qualityScore: number;
+  guideBounds?: CenteringBounds;
 }
 
 const GUIDANCE_WIDTH = 260;
@@ -23,6 +24,13 @@ export function analyzeVideoFrame(
     return {
       status: 'warning',
       message: 'Waiting for a stable camera frame…',
+      score: 0,
+    };
+  }
+  if (!guideBounds) {
+    return {
+      status: 'warning',
+      message: 'Waiting for the camera guide to be measured…',
       score: 0,
     };
   }
@@ -40,7 +48,7 @@ export function analyzeVideoFrame(
     pixels,
     canvas.width,
     canvas.height,
-    guideBounds ?? undefined,
+    guideBounds,
   );
   if (metrics.glareFraction > 0.075) {
     return {
@@ -131,11 +139,78 @@ export async function captureBestFrame(
   if (!bestCanvas) {
     throw new Error('No camera frame could be captured.');
   }
+  const cropped = cropCanvasToGuide(bestCanvas, guideBounds);
   return {
-    blob: await canvasToJpeg(bestCanvas),
-    width: bestCanvas.width,
-    height: bestCanvas.height,
+    blob: await canvasToJpeg(cropped.canvas),
+    width: cropped.canvas.width,
+    height: cropped.canvas.height,
     qualityScore: bestScore,
+    guideBounds: cropped.guideBounds,
+  };
+}
+
+function cropCanvasToGuide(
+  source: HTMLCanvasElement,
+  guideBounds?: CenteringBounds | null,
+): { canvas: HTMLCanvasElement; guideBounds?: CenteringBounds } {
+  if (!guideBounds) {
+    return { canvas: source };
+  }
+  const guideWidth = guideBounds.right - guideBounds.left;
+  const guideHeight = guideBounds.bottom - guideBounds.top;
+  if (guideWidth <= 0 || guideHeight <= 0) {
+    return { canvas: source };
+  }
+  const paddingX = guideWidth * 0.16;
+  const paddingY = guideHeight * 0.16;
+  const cropLeft = clamp(
+    Math.floor((guideBounds.left - paddingX) * source.width),
+    0,
+    source.width - 1,
+  );
+  const cropTop = clamp(
+    Math.floor((guideBounds.top - paddingY) * source.height),
+    0,
+    source.height - 1,
+  );
+  const cropRight = clamp(
+    Math.ceil((guideBounds.right + paddingX) * source.width),
+    cropLeft + 1,
+    source.width,
+  );
+  const cropBottom = clamp(
+    Math.ceil((guideBounds.bottom + paddingY) * source.height),
+    cropTop + 1,
+    source.height,
+  );
+  const cropWidth = cropRight - cropLeft;
+  const cropHeight = cropBottom - cropTop;
+  const canvas = document.createElement('canvas');
+  canvas.width = cropWidth;
+  canvas.height = cropHeight;
+  const context = canvas.getContext('2d');
+  if (!context) {
+    throw new Error('This browser cannot crop the selected camera frame.');
+  }
+  context.drawImage(
+    source,
+    cropLeft,
+    cropTop,
+    cropWidth,
+    cropHeight,
+    0,
+    0,
+    cropWidth,
+    cropHeight,
+  );
+  return {
+    canvas,
+    guideBounds: {
+      left: (guideBounds.left * source.width - cropLeft) / cropWidth,
+      top: (guideBounds.top * source.height - cropTop) / cropHeight,
+      right: (guideBounds.right * source.width - cropLeft) / cropWidth,
+      bottom: (guideBounds.bottom * source.height - cropTop) / cropHeight,
+    },
   };
 }
 

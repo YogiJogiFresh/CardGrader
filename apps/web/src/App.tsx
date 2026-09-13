@@ -202,9 +202,9 @@ export function App() {
     setUploadOpen(method === 'upload');
     if (method === 'upload') {
       stopCamera();
-      scrollToSection(uploadSectionRef);
+      window.setTimeout(() => scrollToSection(uploadSectionRef), 0);
     } else {
-      scrollToSection(cameraSectionRef);
+      window.setTimeout(() => scrollToSection(cameraSectionRef), 0);
     }
   }
 
@@ -256,6 +256,7 @@ export function App() {
       cameraGuideRef.current,
     );
     setIsCapturingFrame(true);
+    setCameraGuidance(null);
     try {
       const frame = await captureBestFrame(video, guideBounds);
       addCapture(
@@ -263,7 +264,7 @@ export function App() {
         frame.blob,
         frame.width,
         frame.height,
-        guideBounds ?? undefined,
+        frame.guideBounds,
       );
     } catch (error) {
       setCameraGuidance({
@@ -562,8 +563,12 @@ export function App() {
     ...(currentStep
       ? [
           { id: 'capture-method', label: 'Choose input' },
-          { id: 'capture-camera', label: 'Camera' },
-          { id: 'capture-upload', label: 'Upload' },
+          ...(captureMethod === 'camera'
+            ? [{ id: 'capture-camera', label: 'Camera' }]
+            : []),
+          ...(captureMethod === 'upload'
+            ? [{ id: 'capture-upload', label: 'Upload' }]
+            : []),
         ]
       : []),
     ...(captures.length > 0
@@ -711,7 +716,8 @@ export function App() {
           </div>
         </section>
 
-        <CollapsibleSection
+        {captureMethod === 'camera' ? (
+          <CollapsibleSection
           eyebrow="CAMERA"
           id="capture-camera"
           onOpenChange={(open) => {
@@ -734,7 +740,11 @@ export function App() {
             <div className="camera-frame" ref={cameraFrameRef}>
               <video ref={videoRef} autoPlay muted playsInline />
               <div
-                className="card-guide"
+                className={`card-guide${
+                  cameraGuidance?.status === 'ready'
+                    ? ' card-guide-ready'
+                    : ''
+                }`}
                 aria-hidden="true"
                 ref={cameraGuideRef}
               />
@@ -796,9 +806,11 @@ export function App() {
             ) : null}
             </div>
           </div>
-        </CollapsibleSection>
+          </CollapsibleSection>
+        ) : null}
 
-        <CollapsibleSection
+        {captureMethod === 'upload' ? (
+          <CollapsibleSection
           eyebrow="UPLOAD"
           id="capture-upload"
           onOpenChange={(open) => {
@@ -875,7 +887,8 @@ export function App() {
             </p>
             ) : null}
           </div>
-        </CollapsibleSection>
+          </CollapsibleSection>
+        ) : null}
 
         {captures.length > 0 ? (
           <CollapsibleSection

@@ -565,6 +565,16 @@ p {
   border: 3px solid #f4b942;
   border-radius: 14px;
   box-shadow: 0 0 0 999px rgb(5 12 18 / 28%);
+  transition:
+    border-color 160ms ease,
+    box-shadow 160ms ease;
+}
+
+.card-guide-ready {
+  border-color: #42d392;
+  box-shadow:
+    0 0 0 999px rgb(5 12 18 / 28%),
+    0 0 18px rgb(66 211 146 / 58%);
 }
 
 .actions {
