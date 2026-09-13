@@ -67,8 +67,10 @@ interface InspectionPointer {
 
 interface PendingAnnotation {
   pointerId: number;
-  startX: number;
-  startY: number;
+  pane: HTMLDivElement;
+  x: number;
+  y: number;
+  timer: number;
 }
 
 interface InspectionPinch {
@@ -91,7 +93,9 @@ interface SideSnapshot {
 
 const ZOOM_PREVIEW_SIZE = 144;
 const ZOOM_SCALE = 3.5;
-const ANNOTATION_DRAG_THRESHOLD = 4;
+const ANNOTATION_TOUCH_DELAY = 500;
+const ANNOTATION_HELP =
+  'On the original image, hold one finger for 500 ms to add the selected blemish, then drag for precise placement. Pinch with two fingers on either image to zoom without creating a marker. Existing markers can be dragged. Mouse users can hold Ctrl and click or drag. Remove one marker with Delete or use Clear all. Keyboard users can focus the original image and press Enter or Space to add at the center.';
 const INSPECTION_FILTERS: { value: InspectionFilter; label: string }[] = [
   { value: 'original', label: 'Original' },
   { value: 'negative', label: 'Negative' },
@@ -590,6 +594,7 @@ function EditableCenteringCard({
   const [annotationNote, setAnnotationNote] = useState('');
   const [annotationMarkerSize, setAnnotationMarkerSize] = useState(26);
   const [annotationMarkerOpacity, setAnnotationMarkerOpacity] = useState(100);
+  const [annotationHelpOpen, setAnnotationHelpOpen] = useState(false);
   const [inspectionZoom, setInspectionZoom] = useState(1);
   const [inspectionPan, setInspectionPan] = useState({ x: 0, y: 0 });
   const inspectionDragRef = useRef<InspectionViewDrag | null>(null);
@@ -676,6 +681,10 @@ function EditableCenteringCard({
     () => () => {
       if (filteredUrlRef.current) {
         URL.revokeObjectURL(filteredUrlRef.current);
+      }
+      const pending = pendingAnnotationRef.current;
+      if (pending) {
+        window.clearTimeout(pending.timer);
       }
     },
     [],
@@ -824,11 +833,29 @@ function EditableCenteringCard({
       }
 
       if (originalPane) {
-        pendingAnnotationRef.current = {
+        const pending: PendingAnnotation = {
           pointerId: event.pointerId,
-          startX: event.clientX,
-          startY: event.clientY,
+          pane,
+          x: event.clientX,
+          y: event.clientY,
+          timer: 0,
         };
+        pending.timer = window.setTimeout(() => {
+          if (pendingAnnotationRef.current !== pending) return;
+          const point = inspectionPoint(
+            pending.x,
+            pending.y,
+            pending.pane.getBoundingClientRect(),
+            inspectionZoom,
+            inspectionPan,
+          );
+          annotationDragRef.current = {
+            annotationId: addAnnotationAt(point.x, point.y),
+            pointerId: pending.pointerId,
+          };
+          pendingAnnotationRef.current = null;
+        }, ANNOTATION_TOUCH_DELAY);
+        pendingAnnotationRef.current = pending;
         return;
       }
     }
@@ -907,25 +934,9 @@ function EditableCenteringCard({
       }
 
       const pending = pendingAnnotationRef.current;
-      if (
-        pending?.pointerId === event.pointerId &&
-        Math.hypot(
-          event.clientX - pending.startX,
-          event.clientY - pending.startY,
-        ) >= ANNOTATION_DRAG_THRESHOLD
-      ) {
-        const point = inspectionPoint(
-          event.clientX,
-          event.clientY,
-          event.currentTarget.getBoundingClientRect(),
-          inspectionZoom,
-          inspectionPan,
-        );
-        annotationDragRef.current = {
-          annotationId: addAnnotationAt(point.x, point.y),
-          pointerId: event.pointerId,
-        };
-        pendingAnnotationRef.current = null;
+      if (pending?.pointerId === event.pointerId) {
+        pending.x = event.clientX;
+        pending.y = event.clientY;
       }
     }
 
@@ -984,21 +995,8 @@ function EditableCenteringCard({
   ) {
     const pending = pendingAnnotationRef.current;
     const pinch = inspectionPinchRef.current;
-    if (
-      !cancelled &&
-      pending?.pointerId === event.pointerId &&
-      !pinch
-    ) {
-      const point = inspectionPoint(
-        event.clientX,
-        event.clientY,
-        event.currentTarget.getBoundingClientRect(),
-        inspectionZoom,
-        inspectionPan,
-      );
-      addAnnotationAt(point.x, point.y);
-    }
     if (pending?.pointerId === event.pointerId) {
+      window.clearTimeout(pending.timer);
       pendingAnnotationRef.current = null;
     }
 
@@ -1036,6 +1034,9 @@ function EditableCenteringCard({
     const pointers = touchPointersForPane(pane).slice(0, 2);
     if (pointers.length < 2) return;
     const [[firstId, first], [secondId, second]] = pointers;
+    if (pendingAnnotationRef.current) {
+      window.clearTimeout(pendingAnnotationRef.current.timer);
+    }
     pendingAnnotationRef.current = null;
     annotationDragRef.current = null;
     inspectionDragRef.current = null;
@@ -1284,62 +1285,147 @@ function EditableCenteringCard({
           </label>
         </div>
 
-        <div className="inspection-view-controls">
-          <div
-            aria-label={`${viewTitle(measurement.viewId)} synchronized zoom controls`}
-            className="inspection-zoom-controls"
-            role="group"
-          >
-            <span>Synchronized zoom</span>
+        <section className="annotation-editor" aria-labelledby={`annotations-${capture.id}`}>
+          <div className="annotation-heading">
+            <div className="annotation-title">
+              <h4 id={`annotations-${capture.id}`}>Blemish annotations</h4>
+              <span
+                className={`annotation-help-wrap${
+                  annotationHelpOpen ? ' tooltip-open' : ''
+                }`}
+              >
+                <button
+                  aria-describedby={`annotation-help-${capture.id}`}
+                  aria-label="Blemish annotation help"
+                  className="annotation-help-button"
+                  onBlur={() => setAnnotationHelpOpen(false)}
+                  onClick={() => setAnnotationHelpOpen((open) => !open)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Escape') {
+                      setAnnotationHelpOpen(false);
+                      event.currentTarget.blur();
+                    }
+                  }}
+                  type="button"
+                >
+                  ?
+                </button>
+                <span
+                  className="annotation-help-tooltip"
+                  id={`annotation-help-${capture.id}`}
+                  role="tooltip"
+                >
+                  {ANNOTATION_HELP}
+                </span>
+              </span>
+            </div>
             <button
-              aria-label="Zoom out"
-              className="secondary inspection-zoom-button"
-              disabled={inspectionZoom <= 1}
-              onClick={() => zoomInspection(inspectionZoom - 0.25)}
+              className="secondary compact-button"
+              disabled={annotations.length === 0}
+              onClick={() => setAnnotations([])}
               type="button"
             >
-              −
+              Clear all
             </button>
-            <input
-              aria-label={`${viewTitle(measurement.viewId)} inspection zoom`}
-              max="4"
-              min="1"
-              onChange={(event) => zoomInspection(Number(event.target.value))}
-              step="0.25"
-              type="range"
-              value={inspectionZoom}
-            />
-            <button
-              aria-label="Zoom in"
-              className="secondary inspection-zoom-button"
-              disabled={inspectionZoom >= 4}
-              onClick={() => zoomInspection(inspectionZoom + 0.25)}
-              type="button"
-            >
-              +
-            </button>
-            <strong>{inspectionZoom.toFixed(2)}×</strong>
           </div>
-          <button
-            className="secondary compact-button"
-            disabled={inspectionZoom === 1 && inspectionPan.x === 0 && inspectionPan.y === 0}
-            onClick={() => {
-              setInspectionZoom(1);
-              setInspectionPan({ x: 0, y: 0 });
-            }}
-            type="button"
-          >
-            Reset view
-          </button>
-        </div>
+          <div className="annotation-fields">
+            <label>
+              Type
+              <select
+                onChange={(event) =>
+                  setAnnotationType(
+                    event.target.value as BlemishAnnotation['type'],
+                  )
+                }
+                value={annotationType}
+              >
+                {BLEMISH_TYPES.map((type) => (
+                  <option key={type} value={type}>
+                    {formatBlemishType(type)}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Note
+              <input
+                onChange={(event) => setAnnotationNote(event.target.value)}
+                placeholder="Optional detail"
+                type="text"
+                value={annotationNote}
+              />
+            </label>
+            <div className="annotation-marker-controls">
+              <label>
+                Marker size
+                <span className="annotation-size-control">
+                  <input
+                    aria-label={`${viewTitle(measurement.viewId)} annotation marker size`}
+                    max="48"
+                    min="8"
+                    onChange={(event) =>
+                      setAnnotationMarkerSize(Number(event.target.value))
+                    }
+                    type="range"
+                    value={annotationMarkerSize}
+                  />
+                  <strong>{annotationMarkerSize}px</strong>
+                </span>
+              </label>
+              <label>
+                Marker opacity
+                <span className="annotation-size-control">
+                  <input
+                    aria-label={`${viewTitle(measurement.viewId)} annotation marker opacity`}
+                    max="100"
+                    min="20"
+                    onChange={(event) =>
+                      setAnnotationMarkerOpacity(Number(event.target.value))
+                    }
+                    step="5"
+                    type="range"
+                    value={annotationMarkerOpacity}
+                  />
+                  <strong>{annotationMarkerOpacity}%</strong>
+                </span>
+              </label>
+            </div>
+          </div>
+          {annotations.length === 0 ? (
+            <p>No blemishes marked.</p>
+          ) : (
+            <ol className="annotation-list">
+              {annotations.map((annotation) => (
+                <li key={annotation.id}>
+                  <span>
+                    <strong>{formatBlemishType(annotation.type)}</strong>
+                    {annotation.note ? ` — ${annotation.note}` : ''}
+                  </span>
+                  <button
+                    aria-label={`Delete ${formatBlemishType(annotation.type)} annotation`}
+                    className="remove-picture"
+                    onClick={() =>
+                      setAnnotations((current) =>
+                        current.filter((item) => item.id !== annotation.id),
+                      )
+                    }
+                    type="button"
+                  >
+                    Delete
+                  </button>
+                </li>
+              ))}
+            </ol>
+          )}
+        </section>
 
         <div className="inspection-comparison">
           <figure>
             <figcaption>
-              Original · One finger marks · two fingers zoom
+              Original · hold to mark · two fingers zoom
             </figcaption>
             <div
-              aria-label={`${viewTitle(measurement.viewId)} original inspection pane. Tap or drag with one finger to place a marker, or pinch with two fingers to zoom. Mouse users can hold Control and click or drag. Press Enter to place a marker at the view center.`}
+              aria-label={`${viewTitle(measurement.viewId)} original inspection pane. Hold one finger for 500 milliseconds to place a marker, then drag to position it, or pinch with two fingers to zoom. Mouse users can hold Control and click or drag. Press Enter to place a marker at the view center.`}
               className="inspection-pane"
               onContextMenu={(event) => {
                 if (event.ctrlKey) {
@@ -1423,7 +1509,7 @@ function EditableCenteringCard({
               {' · pinch to zoom'}
             </figcaption>
             <div
-              aria-label={`${viewTitle(measurement.viewId)} filtered preview. Drag with one finger to pan, pinch with two fingers to zoom, or use the zoom controls above.`}
+              aria-label={`${viewTitle(measurement.viewId)} filtered preview. Drag with one finger to pan, pinch with two fingers to zoom, or use the synchronized zoom controls below the images.`}
               className="inspection-pane"
               onPointerCancel={cancelInspection}
               onPointerDown={(event) =>
@@ -1460,117 +1546,54 @@ function EditableCenteringCard({
           </figure>
         </div>
 
-        <section className="annotation-editor" aria-labelledby={`annotations-${capture.id}`}>
-          <div className="annotation-heading">
-            <h4 id={`annotations-${capture.id}`}>Blemish annotations</h4>
+        <div className="inspection-view-controls">
+          <div
+            aria-label={`${viewTitle(measurement.viewId)} synchronized zoom controls`}
+            className="inspection-zoom-controls"
+            role="group"
+          >
+            <span>Synchronized zoom</span>
             <button
-              className="secondary compact-button"
-              disabled={annotations.length === 0}
-              onClick={() => setAnnotations([])}
+              aria-label="Zoom out"
+              className="secondary inspection-zoom-button"
+              disabled={inspectionZoom <= 1}
+              onClick={() => zoomInspection(inspectionZoom - 0.25)}
               type="button"
             >
-              Clear all
+              −
             </button>
+            <input
+              aria-label={`${viewTitle(measurement.viewId)} inspection zoom`}
+              max="4"
+              min="1"
+              onChange={(event) => zoomInspection(Number(event.target.value))}
+              step="0.25"
+              type="range"
+              value={inspectionZoom}
+            />
+            <button
+              aria-label="Zoom in"
+              className="secondary inspection-zoom-button"
+              disabled={inspectionZoom >= 4}
+              onClick={() => zoomInspection(inspectionZoom + 0.25)}
+              type="button"
+            >
+              +
+            </button>
+            <strong>{inspectionZoom.toFixed(2)}×</strong>
           </div>
-          <div className="annotation-fields">
-            <label>
-              Type
-              <select
-                onChange={(event) =>
-                  setAnnotationType(
-                    event.target.value as BlemishAnnotation['type'],
-                  )
-                }
-                value={annotationType}
-              >
-                {BLEMISH_TYPES.map((type) => (
-                  <option key={type} value={type}>
-                    {formatBlemishType(type)}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              Note
-              <input
-                onChange={(event) => setAnnotationNote(event.target.value)}
-                placeholder="Optional detail"
-                type="text"
-                value={annotationNote}
-              />
-            </label>
-            <div className="annotation-marker-controls">
-              <label>
-                Marker size
-                <span className="annotation-size-control">
-                  <input
-                    aria-label={`${viewTitle(measurement.viewId)} annotation marker size`}
-                    max="48"
-                    min="8"
-                    onChange={(event) =>
-                      setAnnotationMarkerSize(Number(event.target.value))
-                    }
-                    type="range"
-                    value={annotationMarkerSize}
-                  />
-                  <strong>{annotationMarkerSize}px</strong>
-                </span>
-              </label>
-              <label>
-                Marker opacity
-                <span className="annotation-size-control">
-                  <input
-                    aria-label={`${viewTitle(measurement.viewId)} annotation marker opacity`}
-                    max="100"
-                    min="20"
-                    onChange={(event) =>
-                      setAnnotationMarkerOpacity(Number(event.target.value))
-                    }
-                    step="5"
-                    type="range"
-                    value={annotationMarkerOpacity}
-                  />
-                  <strong>{annotationMarkerOpacity}%</strong>
-                </span>
-              </label>
-            </div>
-          </div>
-          <p className="annotation-help">
-            On the original image, use one finger to tap and add the selected
-            blemish or drag for precise placement. Pinch with two fingers on
-            either image to zoom without creating a marker. Existing markers
-            can also be dragged. Mouse users can hold Ctrl and click or drag.
-            Remove one marker with its Delete control or use Clear all. For
-            keyboard use, focus the original image and press Enter or Space to
-            add at the center.
-          </p>
-          {annotations.length === 0 ? (
-            <p>No blemishes marked.</p>
-          ) : (
-            <ol className="annotation-list">
-              {annotations.map((annotation) => (
-                <li key={annotation.id}>
-                  <span>
-                    <strong>{formatBlemishType(annotation.type)}</strong>
-                    {annotation.note ? ` — ${annotation.note}` : ''}
-                  </span>
-                  <button
-                    aria-label={`Delete ${formatBlemishType(annotation.type)} annotation`}
-                    className="remove-picture"
-                    onClick={() =>
-                      setAnnotations((current) =>
-                        current.filter((item) => item.id !== annotation.id),
-                      )
-                    }
-                    type="button"
-                  >
-                    Delete
-                  </button>
-                </li>
-              ))}
-            </ol>
-          )}
-        </section>
+          <button
+            className="secondary compact-button"
+            disabled={inspectionZoom === 1 && inspectionPan.x === 0 && inspectionPan.y === 0}
+            onClick={() => {
+              setInspectionZoom(1);
+              setInspectionPan({ x: 0, y: 0 });
+            }}
+            type="button"
+          >
+            Reset view
+          </button>
+        </div>
 
         <section className="quality-section" aria-labelledby={`quality-${capture.id}`}>
           <h4 id={`quality-${capture.id}`}>Automatic image quality checks</h4>

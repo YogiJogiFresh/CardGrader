@@ -74,14 +74,14 @@ manual blemish markers and notes; PNG report downloads; and a print view that
 can be saved as PDF. Images remain in the current browser tab and are not
 uploaded.
 
-On touchscreens, blemish markers are added with a quick tap on the original
-inspection image or placed precisely by touching and dragging. Existing markers
-can also be dragged. A second finger cancels pending marker placement and starts
-synchronized pinch zoom, so pinching never creates a blemish. Mouse users can
-still hold Ctrl and click or drag. Markers can be removed individually or all at
-once with Clear all. Marker size is adjustable per card side, and touch-friendly
-minus/plus buttons and a range control remain available for zoom. Marker
-opacity is also adjustable per card side.
+On touchscreens, hold one finger on the original inspection image for 500 ms
+before a blemish marker is created, then drag for precise placement. Releasing
+early creates nothing. Existing markers can still be dragged, and a second
+finger cancels pending placement and starts synchronized pinch zoom. Mouse
+users can still hold Ctrl and click or drag. Marker instructions are available
+from the question-mark tooltip beside Blemish annotations. The blemish type,
+note, size, and opacity controls appear before the image comparison; synchronized
+zoom appears afterward. Markers can be removed individually or all at once.
 
 After both sides are analyzed, users can compare their centering and manually
 marked blemishes against PSA, TAG, CGC, or Beckett/BGS criteria. The app reports

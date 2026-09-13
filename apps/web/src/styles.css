@@ -1339,6 +1339,92 @@ figcaption select {
   margin: 0;
 }
 
+.annotation-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.annotation-help-wrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.annotation-help-button {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid #526775;
+  border-radius: 50%;
+  background: #14232d;
+  color: #9ee4ff;
+  font-size: 0.78rem;
+  font-weight: 900;
+}
+
+.annotation-help-button:focus-visible,
+.annotation-help-wrap.tooltip-open .annotation-help-button {
+  border-color: #55c2ff;
+  background: #173c4d;
+  color: #ffffff;
+}
+
+.annotation-help-tooltip {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 9px);
+  z-index: 30;
+  width: min(320px, calc(100vw - 56px));
+  padding: 10px 12px;
+  border: 1px solid #35505f;
+  border-radius: 8px;
+  background: #071117;
+  color: #ffffff;
+  box-shadow: 0 8px 20px rgb(0 0 0 / 35%);
+  font-size: 0.75rem;
+  font-weight: 600;
+  line-height: 1.45;
+  opacity: 0;
+  text-align: left;
+  transform: translateY(4px);
+  transition:
+    opacity 120ms ease,
+    transform 120ms ease;
+  visibility: hidden;
+}
+
+.annotation-help-tooltip::after {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  width: 100%;
+  height: 9px;
+  content: '';
+}
+
+.annotation-help-wrap:focus-within .annotation-help-tooltip,
+.annotation-help-wrap.tooltip-open .annotation-help-tooltip {
+  opacity: 1;
+  transform: translateY(0);
+  visibility: visible;
+}
+
+@media (hover: hover) {
+  .annotation-help-wrap:hover .annotation-help-button {
+    border-color: #55c2ff;
+    background: #173c4d;
+    color: #ffffff;
+  }
+
+  .annotation-help-wrap:hover .annotation-help-tooltip {
+    opacity: 1;
+    transform: translateY(0);
+    visibility: visible;
+  }
+}
+
 .annotation-fields {
   display: grid;
   gap: 9px;
@@ -1366,10 +1452,6 @@ figcaption select {
   min-width: 38px;
   color: #ffffff;
   text-align: right;
-}
-
-.annotation-help {
-  color: #9eacb8;
 }
 
 .annotation-list,
