@@ -3,6 +3,10 @@ import {
   computeCornerAgreement,
   constrainPointToGuide,
 } from './captureGeometry.mjs';
+import {
+  detectCardContour,
+  type CardContourResult,
+} from './cardContour';
 
 const MAX_ANALYSIS_DIMENSION = 1000;
 const CARD_ASPECT = 2.5 / 3.5;
@@ -62,6 +66,9 @@ export interface CenteringMeasurement {
     agreementScore: number;
     innerFrameSupport: number;
     guideReferenced: boolean;
+    contourSideCoverage?: [number, number, number, number];
+    contourRectangularity?: number;
+    contourVariantCount?: number;
   };
 }
 
@@ -169,62 +176,39 @@ export async function analyzeCentering(
     cornersFromBounds(
       options.expectedOuterBounds ?? defaultManualOuterBounds(capture),
     );
-  const variants = createEdgeVariants(channels, width, height);
   const hasCaptureGuide = Boolean(
     options.expectedOuterCorners ?? options.expectedOuterBounds,
   );
-  const guidedCandidates = hasCaptureGuide
-    ? variants
-        .map((edges) =>
-          detectOuterCandidate(
-            edges,
-            width,
-            height,
-            expectedCorners,
-            true,
-            true,
-          ),
-        )
-        .filter((candidate): candidate is OuterCandidate => candidate !== null)
-        .filter(
-          (candidate) =>
-            candidate.guideDistance <= 0.08 &&
-            candidate.edgeSupport >= 0.42 &&
-            candidate.aspectScore >= 0.55 &&
-            candidate.geometryScore >= 0.48,
-        )
-    : [];
-  const broadCandidates = hasCaptureGuide
-    ? []
-    : variants
-        .map((edges) =>
-          detectOuterCandidate(
-            edges,
-            width,
-            height,
-            expectedCorners,
-            false,
-            false,
-          ),
-        )
-        .filter((candidate): candidate is OuterCandidate => candidate !== null)
-        .filter(
-          (candidate) =>
-            candidate.edgeSupport >= 0.4 &&
-            candidate.aspectScore >= 0.45 &&
-            candidate.geometryScore >= 0.42,
-        );
-  const candidates = hasCaptureGuide ? guidedCandidates : broadCandidates;
-  const rankedCandidates = rankCandidatesByAgreement(candidates);
-  const detectedOuter = rankedCandidates[0];
+  let contourResult: CardContourResult | null = null;
+  let contourFailure: string | undefined;
+  try {
+    contourResult = await detectCardContour(
+      pixels,
+      width,
+      height,
+      hasCaptureGuide ? expectedCorners : undefined,
+    );
+  } catch (error) {
+    contourFailure =
+      error instanceof Error
+        ? error.message
+        : 'The local contour detector could not be initialized.';
+  }
+  const detectedOuter = contourResult
+    ? createContourCandidate(
+        contourResult,
+        expectedCorners,
+        hasCaptureGuide,
+      )
+    : null;
   const useGuideFallback =
     hasCaptureGuide &&
     (!detectedOuter ||
-      detectedOuter.score < 0.48 ||
-      detectedOuter.edgeSupport < 0.48 ||
+      detectedOuter.score < 0.52 ||
+      detectedOuter.edgeSupport < 0.42 ||
       detectedOuter.aspectScore < 0.65 ||
       detectedOuter.geometryScore < 0.58 ||
-      detectedOuter.agreementScore < 0.45 ||
+      detectedOuter.agreementScore < 0.35 ||
       detectedOuter.refinementUsedGuide);
   const outer = useGuideFallback
     ? createGuideCandidate(expectedCorners, width, height)
@@ -232,7 +216,9 @@ export async function analyzeCentering(
 
   if (!outer || (!hasCaptureGuide && outer.score < 0.36)) {
     throw new Error(
-      'The card edges could not be separated from the background. Continue with manual overlays or retake the picture with more visible background contrast.',
+      contourFailure
+        ? `The local contour detector failed: ${contourFailure} Continue with manual overlays.`
+        : 'No complete card-shaped contour was supported on all four sides. Continue with manual overlays or retake the picture with more visible background contrast.',
     );
   }
 
@@ -249,7 +235,9 @@ export async function analyzeCentering(
 
   if (useGuideFallback) {
     warnings.push(
-      'Pixel edges were not reliable enough to refine the camera guide. The cyan overlay remains on the captured guide and should be verified manually.',
+      contourFailure
+        ? `The local contour detector failed: ${contourFailure} The cyan overlay remains on the captured guide and should be verified manually.`
+        : 'No complete card-shaped contour had reliable support on all four sides. The cyan overlay remains on the captured guide and should be verified manually.',
     );
   } else if (outer.score < 0.58) {
     warnings.push(
@@ -332,7 +320,43 @@ export async function analyzeCentering(
       agreementScore: outer.agreementScore,
       innerFrameSupport: inner.support,
       guideReferenced: hasCaptureGuide,
+      contourSideCoverage: contourResult?.diagnostics.sideCoverage,
+      contourRectangularity: contourResult?.diagnostics.rectangularity,
+      contourVariantCount: contourResult?.diagnostics.variantCount,
     },
+  };
+}
+
+function createContourCandidate(
+  result: CardContourResult,
+  expectedCorners: CenteringCorners,
+  hasCaptureGuide: boolean,
+): OuterCandidate {
+  const diagnostics = result.diagnostics;
+  const refinement = hasCaptureGuide
+    ? refineGuideCorners(
+        expectedCorners,
+        result.corners,
+        diagnostics.minimumSideCoverage * 0.55 +
+          diagnostics.meanSideCoverage * 0.45,
+        diagnostics.geometryScore,
+        true,
+      )
+    : { corners: result.corners, usedGuideFallback: false };
+  return {
+    corners: refinement.corners,
+    detectedCorners: result.corners,
+    score: diagnostics.score,
+    edgeSupport:
+      diagnostics.minimumSideCoverage * 0.55 +
+      diagnostics.meanSideCoverage * 0.45,
+    aspectScore: diagnostics.aspectScore,
+    guideScore: diagnostics.guideScore,
+    geometryScore: diagnostics.geometryScore,
+    guideDistance: diagnostics.guideDistance,
+    guidedSearch: hasCaptureGuide,
+    agreementScore: diagnostics.agreementScore,
+    refinementUsedGuide: refinement.usedGuideFallback,
   };
 }
 

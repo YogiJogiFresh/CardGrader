@@ -34,6 +34,7 @@ export default defineConfig(({ mode }) => {
         },
         workbox: {
           clientsClaim: true,
+          maximumFileSizeToCacheInBytes: 17 * 1024 * 1024,
           navigateFallback: `${base}index.html`,
           skipWaiting: true,
           runtimeCaching: [

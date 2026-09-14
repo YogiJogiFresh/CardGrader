@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@cardgrader/domain": "0.1.0",
+    "@techstark/opencv-js": "5.0.0-release.1",
     "onnxruntime-web": "^1.24.3",
     "react": "19.2.3",
     "react-dom": "19.2.3"

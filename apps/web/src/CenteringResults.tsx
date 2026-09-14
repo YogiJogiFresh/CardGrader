@@ -1218,6 +1218,20 @@ function EditableCenteringCard({
             </strong>
           </div>
         ) : null}
+        {measurement.method === 'automatic' &&
+        measurement.diagnostics?.contourSideCoverage ? (
+          <div>
+            <span>Complete contour support</span>
+            <strong>
+              {Math.round(
+                Math.min(
+                  ...measurement.diagnostics.contourSideCoverage,
+                ) * 100,
+              )}
+              % · {measurement.diagnostics.contourVariantCount ?? 1} variants
+            </strong>
+          </div>
+        ) : null}
         <div>
           <span>Inner frame</span>
           <strong>

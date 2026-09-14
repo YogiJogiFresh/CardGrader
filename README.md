@@ -26,23 +26,32 @@ available workflow and result section.
 
 As soon as the front and back straight-on views are present, the PWA can
 calculate centering locally; the four angled views are optional. The detector
-uses the camera guide as a search hint, compares luminance and color-gradient
-variants, robustly fits tilted card edges across multiple scan lines, and
-perspective-normalizes the card before looking for its inner frame. It reports
-bordered, uncertain, or borderless/full-art frame status and overlays editable
-outer and inner guides. Left/right and top/bottom percentages include a
-detection confidence and are green at 55/45 or better, yellow through 60/40,
-and red beyond 60/40.
+uses a locally bundled OpenCV.js worker to extract closed contours from several
+adaptive edge variants. A result is accepted only when one convex, card-shaped
+perimeter has support on all four sides and substantially agrees across at
+least two variants. The accepted card is perspective-normalized before the
+existing inner-frame detector runs. It reports bordered, uncertain, or
+borderless/full-art frame status and overlays editable outer and inner guides.
+Left/right and top/bottom percentages include a detection confidence and are
+green at 55/45 or better, yellow through 60/40, and red beyond 60/40.
 
 For camera captures, the framing guide is the primary outer-edge reference.
-The detector searches narrow bands along each side of the guide quadrilateral,
-requires independent edge, line-fit, geometry, and cross-variant support, and
-reduces confidence when the fitted card disagrees with the guide. Detected
-corners refine the captured guide rather than replacing it outright and can
-move no more than 5% of the cropped image. If pixel evidence is weak, the cyan
-overlay remains exactly on the camera guide and is explicitly labeled as a
-low-confidence camera-guide fallback. Uploads without guide metadata retain
-the broader automatic search and manual fallback.
+The detector restricts contour extraction to a padded region around the guide,
+then scores complete-perimeter side coverage, rectangularity, card aspect,
+geometry, and cross-variant agreement. Guide proximity is a spatial prior and
+confidence penalty, not positive evidence. Detected corners refine the captured
+guide rather than replacing it outright and can move no more than 5% of the
+cropped image. If no complete contour is reliable, the cyan overlay remains
+exactly on the camera guide and is explicitly labeled as a low-confidence
+camera-guide fallback. Uploads without guide metadata use a broader contour
+region and retain manual fallback.
+
+OpenCV initializes lazily in a Web Worker the first time centering is analyzed,
+so the large computer-vision runtime does not block initial rendering. The
+runtime is part of the static PWA, is precached for offline use, and performs
+all pixel processing on the device. Initialization or worker failures are
+reported explicitly and fall back to the camera guide or manual overlays
+instead of being presented as successful automatic detection.
 
 While the camera is open, local frame checks warn about blur, glare,
 overexposure, underexposure, and weak card/background contrast. Capturing takes

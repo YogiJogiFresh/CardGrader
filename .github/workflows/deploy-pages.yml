@@ -32,6 +32,8 @@ jobs:
         run: npm ci
       - name: Test guide geometry
         run: npm run test:guide-geometry
+      - name: Test contour geometry
+        run: npm run test:contour-geometry
       - name: Build GitHub Pages site
         run: npm run pwa:build:github-pages
 
