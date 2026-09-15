@@ -7,22 +7,18 @@ export interface PixelRectangle {
   height: number;
 }
 
-export interface GuideCrop extends PixelRectangle {
-  guideCorners: CenteringCorners;
-}
-
 export function computeVisibleSourceRect(
   sourceWidth: number,
   sourceHeight: number,
   viewportAspectRatio?: number,
 ): PixelRectangle;
 
-export function computeSymmetricGuideCrop(
+export function mapVisibleGuideToSource(
   sourceWidth: number,
   sourceHeight: number,
+  viewportAspectRatio: number | undefined,
   guideCorners: CenteringCorners,
-  paddingFraction?: number,
-): GuideCrop;
+): CenteringCorners;
 
 export function constrainPointToGuide(
   guide: CenteringPoint,

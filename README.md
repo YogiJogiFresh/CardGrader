@@ -41,7 +41,7 @@ then scores complete-perimeter side coverage, rectangularity, card aspect,
 geometry, and cross-variant agreement. Guide proximity is a spatial prior and
 confidence penalty, not positive evidence. Detected corners refine the captured
 guide rather than replacing it outright and can move no more than 5% of the
-cropped image. If no complete contour is reliable, the cyan overlay remains
+captured visible frame. If no complete contour is reliable, the cyan overlay remains
 exactly on the camera guide and is explicitly labeled as a low-confidence
 camera-guide fallback. Uploads without guide metadata use a broader contour
 region and retain manual fallback.
@@ -55,12 +55,13 @@ instead of being presented as successful automatic detection.
 
 While the camera is open, local frame checks warn about blur, glare,
 overexposure, underexposure, and weak card/background contrast. Capturing takes
-a short three-frame burst and retains only the highest-scoring frame. The
-selected frame is first rendered from the exact `object-fit: cover` viewport
-shown on screen, then cropped around the camera guide with a margin large
-enough for edge searching. The guide and saved image therefore share the same
-coordinate system while retaining visible background on every side. No burst
-frame or diagnostic leaves the browser.
+a short three-frame burst and retains only the highest-scoring frame. Live
+guidance analyzes the exact `object-fit: cover` viewport shown on screen, while
+the saved JPEG uses the camera's complete sensor frame without viewport or
+guide-centered cropping. The on-screen guide is remapped into the full-frame
+coordinate system before contour detection, preserving all captured background
+above, below, and beside the card. No burst frame or diagnostic leaves the
+browser.
 
 If automatic card-edge detection cannot separate the card from its background,
 the user can continue with fully manual overlays without running detection

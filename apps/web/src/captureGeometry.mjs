@@ -30,63 +30,31 @@ export function computeVisibleSourceRect(
   return { x, y, width, height };
 }
 
-export function computeSymmetricGuideCrop(
+export function mapVisibleGuideToSource(
   sourceWidth,
   sourceHeight,
+  viewportAspectRatio,
   guideCorners,
-  paddingFraction = 0.16,
 ) {
   validateGuideCorners(guideCorners);
-  const points = Object.values(guideCorners);
-  const left = Math.min(...points.map((point) => point.x));
-  const top = Math.min(...points.map((point) => point.y));
-  const right = Math.max(...points.map((point) => point.x));
-  const bottom = Math.max(...points.map((point) => point.y));
-  const guideWidth = right - left;
-  const guideHeight = bottom - top;
-  const centerX = (left + right) / 2;
-  const centerY = (top + bottom) / 2;
-  const desiredHalfWidth = guideWidth * (0.5 + paddingFraction);
-  const desiredHalfHeight = guideHeight * (0.5 + paddingFraction);
-  const halfWidth = Math.min(desiredHalfWidth, centerX, 1 - centerX);
-  const halfHeight = Math.min(desiredHalfHeight, centerY, 1 - centerY);
-  const cropLeft = clampInteger(
-    Math.floor((centerX - halfWidth) * sourceWidth),
-    0,
-    sourceWidth - 1,
-  );
-  const cropTop = clampInteger(
-    Math.floor((centerY - halfHeight) * sourceHeight),
-    0,
-    sourceHeight - 1,
-  );
-  const cropRight = clampInteger(
-    Math.ceil((centerX + halfWidth) * sourceWidth),
-    cropLeft + 1,
+  const visible = computeVisibleSourceRect(
     sourceWidth,
-  );
-  const cropBottom = clampInteger(
-    Math.ceil((centerY + halfHeight) * sourceHeight),
-    cropTop + 1,
     sourceHeight,
+    viewportAspectRatio,
   );
-  const width = cropRight - cropLeft;
-  const height = cropBottom - cropTop;
   const remap = (point) => ({
-    x: clampUnit((point.x * sourceWidth - cropLeft) / width),
-    y: clampUnit((point.y * sourceHeight - cropTop) / height),
+    x: clampUnit(
+      (visible.x + point.x * visible.width) / sourceWidth,
+    ),
+    y: clampUnit(
+      (visible.y + point.y * visible.height) / sourceHeight,
+    ),
   });
   return {
-    x: cropLeft,
-    y: cropTop,
-    width,
-    height,
-    guideCorners: {
-      topLeft: remap(guideCorners.topLeft),
-      topRight: remap(guideCorners.topRight),
-      bottomRight: remap(guideCorners.bottomRight),
-      bottomLeft: remap(guideCorners.bottomLeft),
-    },
+    topLeft: remap(guideCorners.topLeft),
+    topRight: remap(guideCorners.topRight),
+    bottomRight: remap(guideCorners.bottomRight),
+    bottomLeft: remap(guideCorners.bottomLeft),
   };
 }
 
@@ -169,10 +137,6 @@ export function validateGuideCorners(corners) {
   if (Math.abs(doubledArea) < 0.02) {
     throw new Error('Guide quadrilateral is too small.');
   }
-}
-
-function clampInteger(value, minimum, maximum) {
-  return Math.min(maximum, Math.max(minimum, Math.round(value)));
 }
 
 function clampUnit(value) {

@@ -4,8 +4,8 @@ import {
   CenteringCorners,
 } from './centering';
 import {
-  computeSymmetricGuideCrop,
   computeVisibleSourceRect,
+  mapVisibleGuideToSource,
   validateGuideCorners,
 } from './captureGeometry.mjs';
 
@@ -126,8 +126,16 @@ export async function captureBestFrame(
   }
   let bestCanvas: HTMLCanvasElement | null = null;
   let bestScore = -Infinity;
+  const sourceGuideCorners = guideCorners
+    ? mapVisibleGuideToSource(
+        video.videoWidth,
+        video.videoHeight,
+        viewportAspectRatio,
+        guideCorners,
+      )
+    : undefined;
   for (let index = 0; index < frameCount; index += 1) {
-    const canvas = renderVisibleVideoFrame(video, viewportAspectRatio);
+    const canvas = renderFullVideoFrame(video);
     const preview = downscaledCanvas(canvas, GUIDANCE_WIDTH);
     const previewContext = preview.getContext('2d', { willReadFrequently: true });
     if (!previewContext) {
@@ -143,7 +151,9 @@ export async function captureBestFrame(
       pixels,
       preview.width,
       preview.height,
-      guideCorners ? boundsFromCorners(guideCorners) : undefined,
+      sourceGuideCorners
+        ? boundsFromCorners(sourceGuideCorners)
+        : undefined,
     );
     if (metrics.score > bestScore) {
       bestCanvas = canvas;
@@ -156,56 +166,25 @@ export async function captureBestFrame(
   if (!bestCanvas) {
     throw new Error('No camera frame could be captured.');
   }
-  const cropped = cropCanvasToGuide(bestCanvas, guideCorners);
   return {
-    blob: await canvasToJpeg(cropped.canvas),
-    width: cropped.canvas.width,
-    height: cropped.canvas.height,
+    blob: await canvasToJpeg(bestCanvas),
+    width: bestCanvas.width,
+    height: bestCanvas.height,
     qualityScore: bestScore,
-    guideCorners: cropped.guideCorners,
+    guideCorners: sourceGuideCorners,
   };
 }
 
-function cropCanvasToGuide(
-  source: HTMLCanvasElement,
-  guideCorners?: CenteringCorners | null,
-): { canvas: HTMLCanvasElement; guideCorners?: CenteringCorners } {
-  if (!guideCorners) {
-    return { canvas: source };
-  }
-  const guideBounds = boundsFromCorners(guideCorners);
-  const guideWidth = guideBounds.right - guideBounds.left;
-  const guideHeight = guideBounds.bottom - guideBounds.top;
-  if (guideWidth <= 0 || guideHeight <= 0) {
-    return { canvas: source };
-  }
-  const crop = computeSymmetricGuideCrop(
-    source.width,
-    source.height,
-    guideCorners,
-  );
+function renderFullVideoFrame(video: HTMLVideoElement): HTMLCanvasElement {
   const canvas = document.createElement('canvas');
-  canvas.width = crop.width;
-  canvas.height = crop.height;
+  canvas.width = video.videoWidth;
+  canvas.height = video.videoHeight;
   const context = canvas.getContext('2d');
   if (!context) {
-    throw new Error('This browser cannot crop the selected camera frame.');
+    throw new Error('This browser cannot prepare camera images.');
   }
-  context.drawImage(
-    source,
-    crop.x,
-    crop.y,
-    crop.width,
-    crop.height,
-    0,
-    0,
-    crop.width,
-    crop.height,
-  );
-  return {
-    canvas,
-    guideCorners: crop.guideCorners,
-  };
+  context.drawImage(video, 0, 0, canvas.width, canvas.height);
+  return canvas;
 }
 
 function renderVisibleVideoFrame(
